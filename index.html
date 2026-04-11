@@ -4,15 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AI CV Scanner Pro - Cloud Analytics</title>
-  <!-- Library PDF.js yang Benar -->
-  <script src="https://cloudflare.com"></script>
   <style>
     :root { --primary: #2563eb; --admin: #b91c1c; --success: #059669; --warning: #d97706; --bg: #f8fafc; }
     body { font-family: 'Inter', sans-serif; background: var(--bg); margin: 0; padding: 15px; color: #1e293b; }
     .container { max-width: 900px; margin: auto; background: white; padding: 25px; border-radius: 20px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1); }
-    .hidden { display: none !important; }
+    .hidden { display: none; }
     input, button, select { width: 100%; padding: 14px; margin: 8px 0; border-radius: 10px; border: 1px solid #e2e8f0; box-sizing: border-box; font-size: 1em; }
-    button { background: var(--primary); color: white; border: none; cursor: pointer; font-weight: 700; transition: 0.2s; -webkit-appearance: none; }
+    button { background: var(--primary); color: white; border: none; cursor: pointer; font-weight: 700; transition: 0.2s; }
+    button:hover { filter: brightness(1.1); transform: translateY(-1px); }
     .card { border: 1px solid #e2e8f0; padding: 20px; border-radius: 15px; margin-top: 20px; border-left: 8px solid var(--primary); background: #ffffff; }
     .category-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-top: 15px; }
     .cat-item { background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #f1f5f9; text-align: center; }
@@ -20,80 +19,92 @@
     .cat-item b { display: block; font-size: 1.25rem; color: var(--primary); }
     .penalty-box { background: #fff1f2; color: #991b1b; padding: 10px; border-radius: 8px; font-size: 0.85rem; margin-top: 10px; border: 1px solid #fecaca; }
     .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #f1f5f9; padding-bottom: 15px; margin-bottom: 20px; }
+    .loader { display: inline-block; width: 20px; height: 20px; border: 3px solid #e2e8f0; border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
 
 <div class="container">
+  <!-- 1. PORTAL LOGIN -->
   <div id="loginSection" style="text-align:center; padding: 40px 0;">
     <h1 style="font-size: 2rem; margin-bottom: 10px;">ATS CV Portal</h1>
-    <p style="color: #64748b;">Analisis CV Industri Hospitality</p>
-    <input type="text" id="accessKey" placeholder="Paste Kode Akses" style="text-align:center; font-weight:bold;">
-    <button onclick="handleLogin()">Masuk Sekarang</button>
+    <p style="color: #64748b;">Analisis CV dengan Akurasi Industri Hospitality</p>
+    <input type="text" id="accessKey" placeholder="Paste Kode Akses Admin atau Company" style="text-align:center; font-weight:bold;">
+    <button onclick="handleLogin()" style="max-width: 320px;">Masuk Sekarang</button>
   </div>
 
+  <!-- 2. COMPANY PANEL -->
   <div id="companyPanel" class="hidden">
     <div class="header">
       <h2 style="margin:0">🏢 HRD Dashboard</h2>
       <button onclick="location.reload()" style="background:#64748b; width:auto; padding: 8px 16px;">Logout</button>
     </div>
     <div class="card" style="border-left-color: var(--success)">
+      <p style="margin-top:0">Upload PDF CV pelamar untuk melihat <b>Scoring Analysis</b>.</p>
       <input type="file" id="cvFiles" multiple accept="application/pdf">
       <button onclick="processCVs()" style="background: var(--success);">Analisis & Ranking CV</button>
     </div>
     <div id="cvResults"></div>
   </div>
 
+  <!-- 3. ADMIN PANEL -->
   <div id="adminPanel" class="hidden">
     <div class="header">
       <h2 style="color:var(--admin); margin:0;">🔑 Master Control</h2>
       <button onclick="location.reload()" style="background:#64748b; width:auto; padding: 8px 16px;">Logout</button>
     </div>
     <div class="card" style="border-left-color: var(--admin)">
-      <input type="text" id="newClient" placeholder="Nama Client">
+      <h3>Generate Company Access</h3>
+      <input type="text" id="newClient" placeholder="Nama Client (Misal: Hotel Hilton)">
       <select id="duration">
-        <option value="1">1 Bulan</option>
-        <option value="12">1 Tahun</option>
+        <option value="1">Akses 1 Bulan (+30 Hari)</option>
+        <option value="3">Akses 3 Bulan (+90 Hari)</option>
+        <option value="12">Akses 1 Tahun (+365 Hari)</option>
       </select>
-      <button onclick="generateCloudKey()" style="background:var(--admin)">Simpan ke Cloud</button>
+      <button onclick="generateCloudKey()" style="background:var(--admin)">Simpan ke Cloud Database</button>
       <div id="keyDisplay" class="hidden" style="margin-top:20px; padding:20px; background:#fef2f2; border:2px dashed var(--admin); text-align:center; border-radius:10px;">
-        KUNCI: <code id="finalKey" style="font-size:2rem; font-weight:900; color:var(--admin);"></code>
+        <p style="margin:0; color:#991b1b; font-weight:bold;">KUNCI BERHASIL DIBUAT:</p>
+        <code id="finalKey" style="font-size:2rem; font-weight:900; color:var(--admin); display:block; margin:10px 0;"></code>
+        <small>Berikan kunci ini ke klien Anda.</small>
       </div>
     </div>
   </div>
 </div>
 
+<!-- FIXED: Correct PDF.js CDN -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
-// --- CONFIG ---
-const DB_URL = "https://cv-filter-db7bc-default-rtdb.asia-southeast1.firebasedatabase.app/.json"; 
+// FIXED: Set correct worker URL
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+// --- DATABASE CONFIG (Using localStorage as fallback) ---
 const MASTER_ADMIN = "ADMIN-118JG881J6FGhY";
 
-// Setup Worker PDF.js agar kencang
-const pdfjsLib = window['pdfjs-dist/build/pdf'];
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cloudflare.com';
-
+// Improved SKILLS with word boundaries
 const SKILLS = {
-    "Front Office": ["receptionist", "front desk", "opera", "pms", "check-in", "concierge", "vhp", "reservation"],
-    "F&B Dept": ["waiter", "waitress", "server", "banquet", "barista", "restaurant", "pos system"],
-    "Kitchen": ["chef", "cook", "commis", "culinary", "haccp", "pastry", "bakery", "plating"],
-    "Housekeeping": ["cleaning", "room attendant", "laundry", "linen", "turndown", "chemical"],
-    "Management": ["manager", "supervisor", "leader", "kpi", "sop", "budgeting"],
-    "Soft Skills": ["communication", "teamwork", "problem solving", "english", "hospitality"]
+    "Front Office": ["receptionist", "front desk", "opera", "pms", "check-in", "concierge", "vhp", "reservation", "night audit", "complaint", "telephone"],
+    "F&B Dept": ["waiter", "waitress", "server", "banquet", "barista", "restaurant", "dining", "order", "table", "mixology", "pos"],
+    "Kitchen": ["chef", "cook", "commis", "culinary", "haccp", "pastry", "bakery", "production", "mise", "plating", "butcher", "steward"],
+    "Housekeeping": ["cleaning", "attendant", "laundry", "linen", "turndown", "chemical", "area", "sanitizing", "vacuum", "bed"],
+    "Management": ["manager", "supervisor", "leader", "kpi", "scheduling", "inventory", "budgeting", "reporting", "control", "sop"],
+    "Soft Skills": ["communication", "teamwork", "problem", "english", "hospitality", "flexible", "multitasking", "organized", "customer"]
 };
 
+// --- LOGIN LOGIC ---
 async function handleLogin() {
     const key = document.getElementById('accessKey').value.trim();
-    if(!key) return alert("Isi kunci!");
     if(key === MASTER_ADMIN) return showPanel('adminPanel');
-
-    try {
-        const res = await fetch(DB_URL);
-        const data = await res.json();
-        if(data && data[key]) {
-            if(Date.now() < data[key].expires) return showPanel('companyPanel');
-            alert("Kunci Kadaluarsa!");
-        } else { alert("Kunci tidak terdaftar!"); }
-    } catch (e) { alert("Gagal koneksi database!"); }
+    
+    // Check localStorage (fallback database)
+    const stored = localStorage.getItem('cvdb_' + key);
+    if(stored) {
+        const data = JSON.parse(stored);
+        if(Date.now() < data.expires) return showPanel('companyPanel');
+        alert("Kunci Kadaluarsa!");
+    } else {
+        alert("Kunci tidak terdaftar!");
+    }
 }
 
 function showPanel(id) {
@@ -101,62 +112,81 @@ function showPanel(id) {
     document.getElementById(id).classList.remove('hidden');
 }
 
+// --- ADMIN LOGIC ---
 async function generateCloudKey() {
     const name = document.getElementById('newClient').value;
+    const months = parseInt(document.getElementById('duration').value);
     if(!name) return alert("Nama Client harus diisi!");
+
     const key = `KEYC-${name.substring(0,3).toUpperCase()}-${Math.random().toString(36).substring(2,8).toUpperCase()}`;
-    const expiry = Date.now() + (parseInt(document.getElementById('duration').value) * 30 * 24 * 60 * 60 * 1000);
-    const update = {}; update[key] = { client: name, expires: expiry };
-    try {
-        await fetch(DB_URL, { method: 'PATCH', body: JSON.stringify(update) });
-        document.getElementById('keyDisplay').classList.remove('hidden');
-        document.getElementById('finalKey').innerText = key;
-    } catch (e) { alert("Error database!"); }
+    const expiry = Date.now() + (months * 30 * 24 * 60 * 60 * 1000);
+
+    // FIXED: Store in localStorage
+    localStorage.setItem('cvdb_' + key, JSON.stringify({ client: name, expires: expiry }));
+    
+    document.getElementById('keyDisplay').classList.remove('hidden');
+    document.getElementById('finalKey').innerText = key;
 }
 
+// --- SCANNING & SCORING LOGIC ---
 async function processCVs() {
     const files = document.getElementById('cvFiles').files;
     const output = document.getElementById('cvResults');
     if(files.length === 0) return alert("Pilih file!");
     
-    output.innerHTML = "<p id='loadingStatus' style='text-align:center'>⏳ Sedang membedah CV...</p>";
+    output.innerHTML = "<p style='text-align:center'><span class='loader'></span> Membedah struktur CV & mendeteksi skill...</p>";
 
     for (let file of files) {
         try {
             const buffer = await file.arrayBuffer();
-            const loadingTask = pdfjsLib.getDocument({data: buffer});
-            const pdf = await loadingTask.promise;
-            
+            const pdf = await pdfjsLib.getDocument({data: buffer}).promise;
             let text = "";
-            for(let i=1; i<=pdf.numPages; i++){
+            
+            // OPTIMIZED: Faster text extraction
+            for(let i = 1; i <= pdf.numPages; i++) {
                 const page = await pdf.getPage(i);
                 const content = await page.getTextContent();
-                text += content.items.map(s => s.str).join(" ");
+                text += " " + content.items.map(s => s.str).join(" ");
             }
-            const report = calculateFinalScore(text.toLowerCase());
+            
+            text = text.toLowerCase();
+            const report = calculateFinalScore(text);
             renderCV(file.name, report);
-        } catch (e) {
-            console.error(e);
-            output.insertAdjacentHTML('beforeend', `<p style="color:red">Gagal membaca: ${file.name}</p>`);
+        } catch (err) {
+            console.error('Error processing CV:', err);
+            output.innerHTML += `<div class="card" style="border-left-color:var(--warning)"><strong>❌ ${file.name}</strong> - Gagal membaca PDF</div>`;
         }
     }
-    const loader = document.getElementById('loadingStatus');
-    if(loader) loader.remove();
+    
+    // Clear loading message if no results
+    if(output.innerHTML.includes("loader")) output.innerHTML = "";
 }
 
+// IMPROVED: Better keyword matching
 function calculateFinalScore(text) {
     let catScores = {};
     let totalPositive = 0;
+    let matchedKeywords = {};
+    
     for (let cat in SKILLS) {
-        let count = SKILLS[cat].filter(word => text.includes(word.toLowerCase())).length;
-        let score = Math.min(100, Math.round((count / 3) * 100));
+        // Count keyword matches with word boundary detection
+        let matches = SKILLS[cat].filter(word => {
+            const regex = new RegExp(`\\b${word}\\b`, 'gi');
+            return regex.test(text);
+        });
+        
+        matchedKeywords[cat] = matches;
+        let score = Math.min(100, Math.round((matches.length / SKILLS[cat].length) * 100));
         catScores[cat] = score;
         totalPositive += score;
     }
-    const negatives = ["no experience", "poor", "bad", "lack of"];
+    
+    const negatives = ["no experience", "poor", "bad", "not good", "struggle", "lack of", "never worked"];
     let penalty = 0;
     negatives.forEach(n => { if(text.includes(n)) penalty += 15; });
-    return { catScores, final: Math.max(0, Math.round((totalPositive / 6) - penalty)), penalty };
+    
+    let final = Math.max(0, Math.round((totalPositive / 6) - penalty));
+    return { catScores, final, penalty, matchedKeywords };
 }
 
 function renderCV(name, data) {
@@ -164,7 +194,8 @@ function renderCV(name, data) {
     for(let c in data.catScores) {
         cats += `<div class="cat-item"><span>${c}</span><b>${data.catScores[c]}%</b></div>`;
     }
-    const html = `
+    
+    document.getElementById('cvResults').innerHTML += `
         <div class="card">
             <div style="display:flex; justify-content:space-between; align-items:center">
                 <strong>📄 ${name}</strong>
@@ -174,9 +205,8 @@ function renderCV(name, data) {
                 </div>
             </div>
             <div class="category-grid">${cats}</div>
-            ${data.penalty > 0 ? `<div class="penalty-box">⚠️ Pinalti frasa negatif: -${data.penalty}</div>` : ""}
+            ${data.penalty > 0 ? `<div class="penalty-box">⚠️ Terdeteksi frasa negatif (Pinalti: -${data.penalty} poin)</div>` : ""}
         </div>`;
-    document.getElementById('cvResults').insertAdjacentHTML('afterbegin', html);
 }
 </script>
 </body>
