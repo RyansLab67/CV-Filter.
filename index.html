@@ -51,14 +51,14 @@
   </div>
 </div>
 
-<!-- Library PDF.js di bagian paling bawah body -->
+<!-- Library PDF.js yang sudah diperbaiki -->
 <script src="https://cloudflare.com"></script>
 <script>
-// Pastikan library terisi sebelum digunakan
+// Menghubungkan library ke worker agar pemrosesan PDF lancar
 const pdfjsLib = window['pdfjs-dist/build/pdf'];
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cloudflare.com';
 
-const DB_URL = 'https://cv-filter-db7bc-default-rtdb.asia-southeast1.firebasedatabase.app/keys.json'
+const DB_URL = 'https://cv-filter-db7bc-default-rtdb.asia-southeast1.firebasedatabase.app/keys.json';
 const MASTER_ADMIN = 'ADMIN-118JG881J6FGhY';
 
 const SKILLS = {
@@ -92,7 +92,8 @@ async function handleLogin() {
             alert('Kunci tidak ditemukan!');
         }
     } catch (e) {
-        alert('Gagal akses database. Cek internet!');
+        console.error(e);
+        alert('Gagal akses database. Cek internet atau aturan CORS Firebase!');
     }
 }
 
@@ -132,7 +133,9 @@ async function processCVs() {
     for (const file of files) {
         try {
             const buffer = await file.arrayBuffer();
-            const pdf = await pdfjsLib.getDocument({data: buffer}).promise;
+            const loadingTask = pdfjsLib.getDocument({data: buffer});
+            const pdf = await loadingTask.promise;
+            
             let fullText = '';
             for(let i=1; i<=pdf.numPages; i++) {
                 const page = await pdf.getPage(i);
@@ -141,6 +144,7 @@ async function processCVs() {
             }
             renderResult(file.name, analyzeText(fullText.toLowerCase()));
         } catch (e) {
+            console.error(e);
             output.innerHTML += `<p style="color:red">Gagal baca: ${file.name}</p>`;
         }
     }
