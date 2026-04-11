@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI CV Scanner Pro</title>
+  <style>
+    :root { --primary: #2563eb; --admin: #b91c1c; --success: #059669; --warning: #d97706; --bg: #f8fafc; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); margin: 0; padding: 15px; color: #1e293b; }
+    .container { max-width: 900px; margin: auto; background: white; padding: 25px; border-radius: 20px; box-shadow: 0 10px 15px rgba(0,0,0,0.1); }
+    .hidden { display: none !important; }
+    input, button, select { width: 100%; padding: 14px; margin: 8px 0; border-radius: 10px; border: 1px solid #e2e8f0; box-sizing: border-box; font-size: 16px; }
+    button { background: var(--primary); color: white; border: none; cursor: pointer; font-weight: 700; -webkit-appearance: none; }
+    .card { border: 1px solid #e2e8f0; padding: 20px; border-radius: 15px; margin-top: 20px; border-left: 8px solid var(--primary); background: #ffffff; }
+    .category-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-top: 15px; }
+    .cat-item { background: #f8fafc; padding: 10px; border-radius: 8px; border: 1px solid #f1f5f9; text-align: center; font-size: 12px; }
+    .cat-item b { display: block; font-size: 16px; color: var(--primary); }
+    .penalty-box { background: #fff1f2; color: #991b1b; padding: 10px; border-radius: 8px; font-size: 13px; margin-top: 10px; border: 1px solid #fecaca; }
+    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #f1f5f9; padding-bottom: 15px; margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <div id="loginSection" style="text-align:center; padding: 40px 0;">
+    <h2>ATS CV Portal</h2>
+    <p>Analisis CV Hospitality Industri</p>
+    <input type="text" id="accessKey" placeholder="Paste Kode Akses" style="text-align:center;">
+    <button type="button" onclick="handleLogin()">MASUK SEKARANG</button>
+  </div>
+
+  <div id="companyPanel" class="hidden">
+    <div class="header"><h3>🏢 HRD Dashboard</h3><button type="button" onclick="location.reload()" style="width:auto; padding:5px 15px;">Logout</button></div>
+    <div class="card" style="border-left-color: var(--success)">
+      <input type="file" id="cvFiles" multiple accept="application/pdf">
+      <button type="button" onclick="processCVs()" style="background: var(--success);">Analisis & Ranking CV</button>
+    </div>
+    <div id="cvResults"></div>
+  </div>
+
+  <div id="adminPanel" class="hidden">
+    <div class="header"><h3>🔑 Master Control</h3><button type="button" onclick="location.reload()" style="width:auto; padding:5px 15px;">Logout</button></div>
+    <div class="card" style="border-left-color: var(--admin)">
+      <input type="text" id="newClient" placeholder="Nama Client">
+      <select id="duration"><option value="1">1 Bulan</option><option value="12">1 Tahun</option></select>
+      <button type="button" onclick="generateCloudKey()" style="background:var(--admin)">Simpan ke Cloud</button>
+      <div id="keyDisplay" class="hidden" style="margin-top:20px; padding:20px; border:2px dashed var(--admin); text-align:center;">
+        KUNCI: <code id="finalKey" style="font-size:1.5rem; font-weight:bold;"></code>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Library PDF.js di bagian paling bawah body -->
+<script src="https://cloudflare.com"></script>
+<script>
+// Pastikan library terisi sebelum digunakan
+const pdfjsLib = window['pdfjs-dist/build/pdf'];
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cloudflare.com';
+
+const DB_URL = 'https://firebasedatabase.app';
+const MASTER_ADMIN = 'ADMIN-118JG881J6FGhY';
+
+const SKILLS = {
+    "Front Office": ["receptionist", "front desk", "opera", "pms", "check-in", "concierge", "vhp", "reservation"],
+    "F&B Dept": ["waiter", "waitress", "server", "banquet", "barista", "restaurant", "pos system"],
+    "Kitchen": ["chef", "cook", "commis", "culinary", "haccp", "pastry", "bakery", "plating"],
+    "Housekeeping": ["cleaning", "room attendant", "laundry", "linen", "turndown", "chemical"],
+    "Management": ["manager", "supervisor", "leader", "kpi", "scheduling", "inventory", "budgeting"],
+    "Soft Skills": ["communication", "teamwork", "problem solving", "english", "hospitality"]
+};
+
+async function handleLogin() {
+    const val = document.getElementById('accessKey').value.trim();
+    if(!val) return alert('Masukkan kunci!');
+    
+    if(val === MASTER_ADMIN) {
+        showPanel('adminPanel');
+        return;
+    }
+
+    try {
+        const response = await fetch(DB_URL);
+        const data = await response.json();
+        if(data && data[val]) {
+            if(Date.now() < data[val].expires) {
+                showPanel('companyPanel');
+            } else {
+                alert('Kunci sudah kadaluarsa!');
+            }
+        } else {
+            alert('Kunci tidak ditemukan!');
+        }
+    } catch (e) {
+        alert('Gagal akses database. Cek internet!');
+    }
+}
+
+function showPanel(id) {
+    document.getElementById('loginSection').classList.add('hidden');
+    document.getElementById(id).classList.remove('hidden');
+    window.scrollTo(0,0);
+}
+
+async function generateCloudKey() {
+    const name = document.getElementById('newClient').value.trim();
+    if(!name) return alert('Nama client wajib diisi!');
+    
+    const key = 'KEYC-' + name.substring(0,3).toUpperCase() + '-' + Math.random().toString(36).substring(2,8).toUpperCase();
+    const duration = parseInt(document.getElementById('duration').value);
+    const expiry = Date.now() + (duration * 30 * 24 * 60 * 60 * 1000);
+    
+    const payload = {};
+    payload[key] = { client: name, expires: expiry };
+
+    try {
+        await fetch(DB_URL, { method: 'PATCH', body: JSON.stringify(payload) });
+        document.getElementById('keyDisplay').classList.remove('hidden');
+        document.getElementById('finalKey').innerText = key;
+    } catch (e) {
+        alert('Gagal simpan kunci!');
+    }
+}
+
+async function processCVs() {
+    const files = document.getElementById('cvFiles').files;
+    if(files.length === 0) return alert('Pilih file PDF!');
+    
+    const output = document.getElementById('cvResults');
+    output.innerHTML = '<p style="text-align:center">⏳ Sedang memproses...</p>';
+
+    for (const file of files) {
+        try {
+            const buffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({data: buffer}).promise;
+            let fullText = '';
+            for(let i=1; i<=pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const content = await page.getTextContent();
+                fullText += content.items.map(s => s.str).join(' ');
+            }
+            renderResult(file.name, analyzeText(fullText.toLowerCase()));
+        } catch (e) {
+            output.innerHTML += `<p style="color:red">Gagal baca: ${file.name}</p>`;
+        }
+    }
+    if(output.firstChild && output.firstChild.innerText.includes('memproses')) output.firstChild.remove();
+}
+
+function analyzeText(text) {
+    let catScores = {};
+    let totalPos = 0;
+    for (const cat in SKILLS) {
+        const matches = SKILLS[cat].filter(s => text.includes(s.toLowerCase())).length;
+        const score = Math.min(100, Math.round((matches / 3) * 100));
+        catScores[cat] = score;
+        totalPos += score;
+    }
+    let penalty = 0;
+    ["no experience", "poor", "bad", "lack of"].forEach(n => { if(text.includes(n)) penalty += 15; });
+    return { catScores, final: Math.max(0, Math.round((totalPos / 6) - penalty)), penalty };
+}
+
+function renderResult(name, data) {
+    let grid = '';
+    for(const c in data.catScores) grid += `<div class="cat-item"><span>${c}</span><b>${data.catScores[c]}%</b></div>`;
+    
+    const html = `
+        <div class="card">
+            <strong>📄 ${name}</strong> - <b style="color:blue">${data.final}% Match</b>
+            <div class="category-grid">${grid}</div>
+            ${data.penalty > 0 ? `<div class="penalty-box">⚠️ Pinalti frasa negatif: -${data.penalty}</div>` : ''}
+        </div>`;
+    document.getElementById('cvResults').insertAdjacentHTML('afterbegin', html);
+}
+</script>
+</body>
+</html>
