@@ -8,6 +8,11 @@ const { v4: uuidv4 } = require("uuid");
 const app = express();
 app.use(express.json());
 
+// Pastikan folder 'uploads' ada
+if (!fs.existsSync("uploads")) {
+    fs.mkdirSync("uploads");
+}
+
 const upload = multer({ dest: "uploads/" });
 
 // ===== DATABASE =====
@@ -38,7 +43,7 @@ function validateKey(key) {
 }
 
 // ===== KEYWORDS =====
-const const categories = {
+const categories = {
     kitchen: [
         "chef","cook","cooking","culinary","kitchen","food prep","food preparation",
         "pastry","baking","bakery","grill","fry","restaurant","menu","dish",
@@ -143,130 +148,107 @@ const const categories = {
         "discipline","hardworking","fast learner"
     ]
 };
-};
 
-// ===== ANALYZE =====
-// ===== POSITIVE PHRASES =====
+// ===== PHRASES =====
 const positiveIndicators = [
-    "expert in",
-    "experienced in",
-    "experienced with",
-    "proficient in",
-    "skilled in",
-    "advanced in",
-    "strong in",
-    "specialized in",
-    "highly skilled in",
-    "competent in"
+    "expert in", "experienced in", "experienced with", "proficient in",
+    "skilled in", "advanced in", "strong in", "specialized in",
+    "highly skilled in", "competent in"
 ];
 
-// ===== NEGATIVE PHRASES =====
 const negativeIndicators = [
-    "bad at",
-    "no experience",
-    "lack of experience",
-    "not skilled",
-    "poor at",
-    "beginner in",
-    "little experience",
-    "no knowledge",
-    "weak in",
-    "struggle with",
-    "inexperienced",
-    "not familiar with"
+    "bad at", "no experience", "lack of experience", "not skilled",
+    "poor at", "beginner in", "little experience", "no knowledge",
+    "weak in", "struggle with", "inexperienced", "not familiar with"
 ];
 
-// ===== ANALYZE =====
+// ===== ANALYZE ROUTE =====
 app.post("/analyze", upload.array("cvs"), async (req, res) => {
-    const apiKey = req.headers["x-api-key"];
+    try {
+        const apiKey = req.headers["x-api-key"];
+        const valid = await validateKey(apiKey);  
+        
+        if (!valid) return res.status(403).json({ error: "Invalid or expired key" });  
 
-    const valid = await validateKey(apiKey);  
-    if (!valid) return res.status(403).json({ error: "Invalid or expired key" });  
+        let results = [];  
 
-    let results = [];  
+        for (let file of req.files) {  
+            const dataBuffer = fs.readFileSync(file.path);
+            const data = await pdfParse(dataBuffer);  
+            const text = data.text.toLowerCase();  
 
-    for (let file of req.files) {  
-        const data = await pdfParse(fs.readFileSync(file.path));  
-        const text = data.text.toLowerCase();  
+            let score = {};  
 
-        let score = {};  
+            for (let category in categories) {
+                let total = 0;
 
-        for (let category in categories) {
-            let total = 0;
+                for (let keyword of categories[category]) {
+                    const keywordRegex = new RegExp(`\\b${keyword}\\b`, "gi");
+                    const matches = text.match(keywordRegex);
+                    if (!matches) continue;
 
-            for (let keyword of categories[category]) {
+                    let keywordScore = 0;
 
-                const keywordRegex = new RegExp(`\\b${keyword}\\b`, "gi");
-                const matches = text.match(keywordRegex);
-                if (!matches) continue;
+                    // Negative check
+                    const negativeRegex = new RegExp(
+                        `(\\b(?:${negativeIndicators.join("|")})\\b)[\\s\\S]{0,50}\\b${keyword}\\b`,
+                        "gi"
+                    );
 
-                let keywordScore = 0;
+                    if (negativeRegex.test(text)) {
+                        keywordScore -= 5 * matches.length;
+                        total += keywordScore;
+                        continue;
+                    }
 
-                // NEGATIVE CHECK (strong penalty)
-                const negativeRegex = new RegExp(
-                    `(\\b(?:${negativeIndicators.join("|")})\\b)[\\s\\S]{0,50}\\b${keyword}\\b`,
-                    "gi"
-                );
+                    // Positive check
+                    const positiveRegex = new RegExp(
+                        `(\\b(?:${positiveIndicators.join("|")})\\b)[\\s\\S]{0,50}\\b${keyword}\\b`,
+                        "gi"
+                    );
 
-                if (negativeRegex.test(text)) {
-                    keywordScore -= 5 * matches.length; // HEAVY punishment
+                    if (positiveRegex.test(text)) {
+                        keywordScore += 3 * matches.length;
+                    } else {
+                        keywordScore += 1 * matches.length;
+                    }
+
                     total += keywordScore;
-                    continue; // skip positive if negative found
                 }
-
-                // STRONG POSITIVE CHECK
-                const positiveRegex = new RegExp(
-                    `(\\b(?:${positiveIndicators.join("|")})\\b)[\\s\\S]{0,50}\\b${keyword}\\b`,
-                    "gi"
-                );
-
-                if (positiveRegex.test(text)) {
-                    keywordScore += 3 * matches.length; // strong bonus
-                } else {
-                    keywordScore += 1 * matches.length; // normal mention
-                }
-
-                total += keywordScore;
+                score[category] = total;
             }
 
-            score[category] = total;
-        }
-
-        results.push({  
-            file: file.originalname,  
-            score  
-        });  
-
-        fs.unlinkSync(file.path);  
-    }  
-
-    res.json(results);
+            results.push({ file: file.originalname, score });  
+            fs.unlinkSync(file.path);  
+        }  
+        res.json(results);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // ===== ADMIN ROUTES =====
-
-// create key
 app.post("/admin/create-key", (req, res) => {
     const { months } = req.body;
-
     const key = uuidv4();
-    const expires = Date.now() + months * 30 * 24 * 60 * 60 * 1000;
+    const expires = Date.now() + (parseInt(months) * 30 * 24 * 60 * 60 * 1000);
 
     db.run(
         "INSERT INTO api_keys (key, expires_at, active) VALUES (?, ?, 1)",
-        [key, expires]
+        [key, expires],
+        (err) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json({ key, expires });
+        }
     );
-
-    res.json({ key, expires });
 });
 
-// deactivate key
 app.post("/admin/deactivate", (req, res) => {
     const { key } = req.body;
-
-    db.run("UPDATE api_keys SET active=0 WHERE key=?", [key]);
-
-    res.json({ success: true });
+    db.run("UPDATE api_keys SET active=0 WHERE key=?", [key], (err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ success: true });
+    });
 });
 
 // ===== FRONTEND =====
@@ -274,85 +256,67 @@ app.get("/", (req, res) => {
     res.send(`
 <!DOCTYPE html>
 <html>
-<body style="font-family:sans-serif">
+<body style="font-family:sans-serif; padding: 20px;">
 <h2>CV Analyzer</h2>
-
-<input type="text" id="apikey" placeholder="Enter API Key"><br><br>
+<input type="text" id="apikey" placeholder="Enter API Key" style="width: 300px;"><br><br>
 <input type="file" id="files" multiple><br><br>
-
 <button onclick="upload()">Analyze</button>
-
-<pre id="result"></pre>
-
+<pre id="result" style="background:#f4f4f4; padding:10px; margin-top:10px;"></pre>
 <hr>
-
 <h3>Admin Panel</h3>
-
 <select id="months">
   <option value="1">1 Month</option>
   <option value="3">3 Months</option>
   <option value="6">6 Months</option>
   <option value="12">12 Months</option>
 </select>
-
 <button onclick="createKey()">Generate Key</button><br><br>
-
 <input type="text" id="deactivateKey" placeholder="Key to deactivate">
 <button onclick="deactivate()">Deactivate</button>
-
-<pre id="adminResult"></pre>
+<pre id="adminResult" style="background:#f4f4f4; padding:10px; margin-top:10px;"></pre>
 
 <script>
 async function upload() {
     const key = document.getElementById("apikey").value;
     const files = document.getElementById("files").files;
+    if(!key || files.length === 0) return alert("Isi API Key dan pilih file!");
 
     let formData = new FormData();
-    for (let file of files) {
-        formData.append("cvs", file);
-    }
+    for (let file of files) { formData.append("cvs", file); }
 
     const res = await fetch("/analyze", {
         method: "POST",
         headers: { "x-api-key": key },
         body: formData
     });
-
     const data = await res.json();
     document.getElementById("result").innerText = JSON.stringify(data, null, 2);
 }
 
 async function createKey() {
     const months = document.getElementById("months").value;
-
     const res = await fetch("/admin/create-key", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ months })
     });
-
     const data = await res.json();
     document.getElementById("adminResult").innerText = "NEW KEY: " + data.key;
 }
 
 async function deactivate() {
     const key = document.getElementById("deactivateKey").value;
-
     const res = await fetch("/admin/deactivate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key })
     });
-
-    const data = await res.json();
-    document.getElementById("adminResult").innerText = "Deactivated";
+    document.getElementById("adminResult").innerText = "Key Deactivated";
 }
 </script>
-
 </body>
 </html>
     `);
 });
 
-// ===== START SERVER =====
-app.listen(3000, () => console.log("Running on http://localhost:3000"));
+app.listen(3000, () => console.log("Server running on http://localhost:3000"));
