@@ -8,9 +8,9 @@ const { v4: uuidv4 } = require("uuid");
 const app = express();
 app.use(express.json());
 
-// Pastikan folder 'uploads' ada
-if (!fs.existsSync("uploads")) {
-    fs.mkdirSync("uploads");
+// Buat folder uploads jika belum ada
+if (!fs.existsSync("uploads/")) {
+    fs.mkdirSync("uploads/");
 }
 
 const upload = multer({ dest: "uploads/" });
@@ -18,23 +18,26 @@ const upload = multer({ dest: "uploads/" });
 // ===== DATABASE =====
 const db = new sqlite3.Database("./database.db");
 
-db.run(`
-CREATE TABLE IF NOT EXISTS api_keys (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    key TEXT,
-    expires_at INTEGER,
-    active INTEGER
-)
-`);
+db.serialize(() => {
+    db.run(`
+    CREATE TABLE IF NOT EXISTS api_keys (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key TEXT,
+        expires_at INTEGER,
+        active INTEGER
+    )
+    `);
+});
 
 // ===== KEY VALIDATION =====
 function validateKey(key) {
     return new Promise((resolve) => {
+        if (!key) return resolve(false);
         db.get(
             "SELECT * FROM api_keys WHERE key=? AND active=1",
             [key],
             (err, row) => {
-                if (!row) return resolve(false);
+                if (err || !row) return resolve(false);
                 if (Date.now() > row.expires_at) return resolve(false);
                 resolve(true);
             }
@@ -42,212 +45,109 @@ function validateKey(key) {
     });
 }
 
-// ===== KEYWORDS =====
+// ===== KEYWORDS & CONFIG =====
 const categories = {
-    kitchen: [
-        "chef","cook","cooking","culinary","kitchen","food prep","food preparation",
-        "pastry","baking","bakery","grill","fry","restaurant","menu","dish",
-        "sous chef","line cook","food safety","haccp","plating","recipe"
-    ],
-
-    hospitality: [
-        "hotel","hospitality","guest service","front office","housekeeping",
-        "concierge","reservation","check-in","check out","room service",
-        "guest relations","booking","receptionist","tourism","travel"
-    ],
-
-    it: [
-        "programming","coding","developer","software","web development",
-        "javascript","python","java","html","css","react","node","backend",
-        "frontend","database","sql","api","debugging","git","github",
-        "cybersecurity","network","cloud","aws","ai","machine learning"
-    ],
-
-    marketing: [
-        "marketing","digital marketing","seo","social media","branding",
-        "advertising","campaign","content creation","copywriting",
-        "analytics","engagement","sales funnel","email marketing",
-        "influencer","promotion","market research"
-    ],
-
-    sales: [
-        "sales","selling","negotiation","closing","lead generation",
-        "client acquisition","business development","target","revenue"
-    ],
-
-    finance: [
-        "finance","accounting","bookkeeping","budget","tax","audit",
-        "financial report","excel","spreadsheet","cost analysis",
-        "investment","banking","payroll"
-    ],
-
-    education: [
-        "teaching","teacher","education","lesson plan","curriculum",
-        "classroom","training","tutor","instructor","student assessment",
-        "learning","academic"
-    ],
-
-    design: [
-        "design","graphic design","photoshop","illustrator","ui","ux",
-        "figma","branding","visual","creative","layout","animation"
-    ],
-
-    healthcare: [
-        "nurse","doctor","medical","patient","clinic","hospital",
-        "treatment","diagnosis","healthcare","pharmacy","caregiver"
-    ],
-
-    engineering: [
-        "engineer","engineering","mechanical","electrical","civil",
-        "construction","cad","autocad","project engineering"
-    ],
-
-    logistics: [
-        "logistics","supply chain","warehouse","inventory","shipping",
-        "delivery","distribution","procurement","transport","stock"
-    ],
-
-    customer_service: [
-        "customer service","support","client","communication",
-        "problem solving","call center","help desk","complaint handling"
-    ],
-
-    administration: [
-        "admin","administration","office","documentation","filing",
-        "data entry","clerical","scheduling","coordination"
-    ],
-
-    hr: [
-        "human resources","recruitment","hiring","interview",
-        "employee relations","training","payroll","onboarding"
-    ],
-
-    legal: [
-        "legal","law","contract","compliance","regulation",
-        "litigation","paralegal","attorney"
-    ],
-
-    media: [
-        "video editing","photography","filming","content creator",
-        "youtube","editing","production","broadcast"
-    ],
-
-    sports: [
-        "athlete","coach","training","fitness","gym","exercise",
-        "strength","conditioning","sports","taekwondo"
-    ],
-
-    language: [
-        "english","indonesian","translation","translator",
-        "bilingual","multilingual","communication"
-    ],
-
-    general_skills: [
-        "leadership","teamwork","problem solving","critical thinking",
-        "time management","adaptability","creativity",
-        "discipline","hardworking","fast learner"
-    ]
+    kitchen: ["chef","cook","cooking","culinary","kitchen","food prep","pastry","baking","grill","fry","sous chef","line cook","food safety","haccp","plating","recipe"],
+    hospitality: ["hotel","hospitality","guest service","front office","housekeeping","concierge","reservation","check-in","receptionist","tourism"],
+    it: ["programming","coding","developer","software","javascript","python","java","html","css","react","node","backend","frontend","database","sql","api","git","cybersecurity","cloud","aws"],
+    marketing: ["marketing","digital marketing","seo","social media","branding","advertising","campaign","content creation","copywriting","analytics"],
+    sales: ["sales","selling","negotiation","closing","lead generation","business development"],
+    finance: ["finance","accounting","bookkeeping","budget","tax","audit","financial report","excel","payroll"],
+    education: ["teaching","teacher","education","lesson plan","curriculum","classroom","tutor","instructor"],
+    design: ["design","graphic design","photoshop","illustrator","ui","ux","figma","creative","layout"],
+    healthcare: ["nurse","doctor","medical","patient","clinic","hospital","treatment","pharmacy"],
+    engineering: ["engineer","engineering","mechanical","electrical","civil","construction","cad","autocad"],
+    logistics: ["logistics","supply chain","warehouse","inventory","shipping","delivery","distribution"],
+    customer_service: ["customer service","support","client","communication","problem solving","call center"],
+    administration: ["admin","administration","office","documentation","filing","data entry"],
+    hr: ["human resources","recruitment","hiring","interview","employee relations","onboarding"],
+    legal: ["legal","law","contract","compliance","litigation"],
+    media: ["video editing","photography","filming","content creator","youtube","editing","production"],
+    sports: ["athlete","coach","training","fitness","gym","exercise","sports","taekwondo"],
+    language: ["english","indonesian","translation","translator","bilingual"],
+    general_skills: ["leadership","teamwork","problem solving","critical thinking","time management","adaptability","creativity"]
 };
 
-// ===== PHRASES =====
-const positiveIndicators = [
-    "expert in", "experienced in", "experienced with", "proficient in",
-    "skilled in", "advanced in", "strong in", "specialized in",
-    "highly skilled in", "competent in"
-];
-
-const negativeIndicators = [
-    "bad at", "no experience", "lack of experience", "not skilled",
-    "poor at", "beginner in", "little experience", "no knowledge",
-    "weak in", "struggle with", "inexperienced", "not familiar with"
-];
+const positiveIndicators = ["expert in", "experienced in", "proficient in", "skilled in", "strong in"];
+const negativeIndicators = ["bad at", "no experience", "lack of experience", "not skilled", "poor at", "beginner in"];
 
 // ===== ANALYZE ROUTE =====
 app.post("/analyze", upload.array("cvs"), async (req, res) => {
-    try {
-        const apiKey = req.headers["x-api-key"];
-        const valid = await validateKey(apiKey);  
-        
-        if (!valid) return res.status(403).json({ error: "Invalid or expired key" });  
+    const apiKey = req.headers["x-api-key"];
+    const valid = await validateKey(apiKey);  
+    
+    if (!valid) {
+        // Hapus file yang terlanjur diupload jika key tidak valid
+        req.files.forEach(f => fs.unlinkSync(f.path));
+        return res.status(403).json({ error: "Invalid or expired key" });
+    }
 
-        let results = [];  
+    let results = [];  
 
-        for (let file of req.files) {  
+    for (let file of req.files) {  
+        try {
             const dataBuffer = fs.readFileSync(file.path);
             const data = await pdfParse(dataBuffer);  
-            const text = data.text.toLowerCase();  
+            const text = data.text.toLowerCase().replace(/\s+/g, ' '); // Normalisasi spasi
 
             let score = {};  
 
             for (let category in categories) {
                 let total = 0;
-
                 for (let keyword of categories[category]) {
                     const keywordRegex = new RegExp(`\\b${keyword}\\b`, "gi");
                     const matches = text.match(keywordRegex);
                     if (!matches) continue;
 
                     let keywordScore = 0;
+                    
+                    // Logic Penalty/Bonus per mention
+                    const negRegex = new RegExp(`(?:${negativeIndicators.join("|")})[\\s\\S]{0,50}\\b${keyword}\\b`, "i");
+                    const posRegex = new RegExp(`(?:${positiveIndicators.join("|")})[\\s\\S]{0,50}\\b${keyword}\\b`, "i");
 
-                    // Negative check
-                    const negativeRegex = new RegExp(
-                        `(\\b(?:${negativeIndicators.join("|")})\\b)[\\s\\S]{0,50}\\b${keyword}\\b`,
-                        "gi"
-                    );
-
-                    if (negativeRegex.test(text)) {
-                        keywordScore -= 5 * matches.length;
-                        total += keywordScore;
-                        continue;
-                    }
-
-                    // Positive check
-                    const positiveRegex = new RegExp(
-                        `(\\b(?:${positiveIndicators.join("|")})\\b)[\\s\\S]{0,50}\\b${keyword}\\b`,
-                        "gi"
-                    );
-
-                    if (positiveRegex.test(text)) {
-                        keywordScore += 3 * matches.length;
+                    if (negRegex.test(text)) {
+                        keywordScore -= (5 * matches.length);
+                    } else if (posRegex.test(text)) {
+                        keywordScore += (3 * matches.length);
                     } else {
-                        keywordScore += 1 * matches.length;
+                        keywordScore += (1 * matches.length);
                     }
-
                     total += keywordScore;
                 }
                 score[category] = total;
             }
 
-            results.push({ file: file.originalname, score });  
-            fs.unlinkSync(file.path);  
-        }  
-        res.json(results);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+            results.push({ file: file.originalname, score });
+        } catch (err) {
+            results.push({ file: file.originalname, error: "Failed to parse PDF" });
+        } finally {
+            if (fs.existsSync(file.path)) fs.unlinkSync(file.path);  
+        }
+    }  
+    res.json(results);
 });
 
 // ===== ADMIN ROUTES =====
 app.post("/admin/create-key", (req, res) => {
-    const { months } = req.body;
+    const months = parseInt(req.body.months) || 1;
     const key = uuidv4();
-    const expires = Date.now() + (parseInt(months) * 30 * 24 * 60 * 60 * 1000);
+    const expires = Date.now() + (months * 30 * 24 * 60 * 60 * 1000);
 
     db.run(
         "INSERT INTO api_keys (key, expires_at, active) VALUES (?, ?, 1)",
         [key, expires],
-        (err) => {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json({ key, expires });
+        function(err) {
+            if (err) return res.status(500).json({ error: "Database error" });
+            res.json({ key, expires: new Date(expires).toLocaleString() });
         }
     );
 });
 
 app.post("/admin/deactivate", (req, res) => {
     const { key } = req.body;
-    db.run("UPDATE api_keys SET active=0 WHERE key=?", [key], (err) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ success: true });
+    db.run("UPDATE api_keys SET active=0 WHERE key=?", [key], function(err) {
+        if (err) return res.status(500).json({ error: "Database error" });
+        res.json({ success: true, message: "Key deactivated" });
     });
 });
 
@@ -256,64 +156,62 @@ app.get("/", (req, res) => {
     res.send(`
 <!DOCTYPE html>
 <html>
-<body style="font-family:sans-serif; padding: 20px;">
-<h2>CV Analyzer</h2>
-<input type="text" id="apikey" placeholder="Enter API Key" style="width: 300px;"><br><br>
-<input type="file" id="files" multiple><br><br>
-<button onclick="upload()">Analyze</button>
-<pre id="result" style="background:#f4f4f4; padding:10px; margin-top:10px;"></pre>
-<hr>
-<h3>Admin Panel</h3>
-<select id="months">
-  <option value="1">1 Month</option>
-  <option value="3">3 Months</option>
-  <option value="6">6 Months</option>
-  <option value="12">12 Months</option>
-</select>
-<button onclick="createKey()">Generate Key</button><br><br>
-<input type="text" id="deactivateKey" placeholder="Key to deactivate">
-<button onclick="deactivate()">Deactivate</button>
-<pre id="adminResult" style="background:#f4f4f4; padding:10px; margin-top:10px;"></pre>
+<head><title>CV Analyzer</title></head>
+<body style="font-family:sans-serif; max-width: 800px; margin: auto; padding: 20px;">
+    <h2>CV Analyzer</h2>
+    <input type="text" id="apikey" placeholder="Enter API Key" style="width:100%"><br><br>
+    <input type="file" id="files" multiple><br><br>
+    <button onclick="upload()">Analyze CVs</button>
+    <pre id="result" style="background:#eee; padding:10px;"></pre>
+    <hr>
+    <h3>Admin Panel</h3>
+    <select id="months"><option value="1">1 Month</option><option value="12">1 Year</option></select>
+    <button onclick="createKey()">Generate Key</button><br><br>
+    <input type="text" id="deactivateKey" placeholder="Key to deactivate">
+    <button onclick="deactivate()">Deactivate</button>
+    <pre id="adminResult" style="background:#f9f9f9; padding:10px;"></pre>
 
-<script>
-async function upload() {
-    const key = document.getElementById("apikey").value;
-    const files = document.getElementById("files").files;
-    if(!key || files.length === 0) return alert("Isi API Key dan pilih file!");
+    <script>
+    async function upload() {
+        const key = document.getElementById("apikey").value;
+        const files = document.getElementById("files").files;
+        if(!key || files.length === 0) return alert("Fill key and select files");
 
-    let formData = new FormData();
-    for (let file of files) { formData.append("cvs", file); }
+        let formData = new FormData();
+        for (let file of files) formData.append("cvs", file);
 
-    const res = await fetch("/analyze", {
-        method: "POST",
-        headers: { "x-api-key": key },
-        body: formData
-    });
-    const data = await res.json();
-    document.getElementById("result").innerText = JSON.stringify(data, null, 2);
-}
+        document.getElementById("result").innerText = "Analyzing...";
+        const res = await fetch("/analyze", {
+            method: "POST",
+            headers: { "x-api-key": key },
+            body: formData
+        });
+        const data = await res.json();
+        document.getElementById("result").innerText = JSON.stringify(data, null, 2);
+    }
 
-async function createKey() {
-    const months = document.getElementById("months").value;
-    const res = await fetch("/admin/create-key", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ months })
-    });
-    const data = await res.json();
-    document.getElementById("adminResult").innerText = "NEW KEY: " + data.key;
-}
+    async function createKey() {
+        const months = document.getElementById("months").value;
+        const res = await fetch("/admin/create-key", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ months })
+        });
+        const data = await res.json();
+        document.getElementById("adminResult").innerText = "NEW KEY: " + data.key;
+    }
 
-async function deactivate() {
-    const key = document.getElementById("deactivateKey").value;
-    const res = await fetch("/admin/deactivate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key })
-    });
-    document.getElementById("adminResult").innerText = "Key Deactivated";
-}
-</script>
+    async function deactivate() {
+        const key = document.getElementById("deactivateKey").value;
+        const res = await fetch("/admin/deactivate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ key })
+        });
+        const data = await res.json();
+        document.getElementById("adminResult").innerText = data.success ? "Deactivated" : "Failed";
+    }
+    </script>
 </body>
 </html>
     `);
