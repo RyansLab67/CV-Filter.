@@ -1,220 +1,170 @@
-const express = require("express");
-const multer = require("multer");
-const pdfParse = require("pdf-parse");
-const sqlite3 = require("sqlite3").verbose();
-const fs = require("fs");
-const { v4: uuidv4 } = require("uuid");
-
-const app = express();
-app.use(express.json());
-
-// Buat folder uploads jika belum ada
-if (!fs.existsSync("uploads/")) {
-    fs.mkdirSync("uploads/");
-}
-
-const upload = multer({ dest: "uploads/" });
-
-// ===== DATABASE =====
-const db = new sqlite3.Database("./database.db");
-
-db.serialize(() => {
-    db.run(`
-    CREATE TABLE IF NOT EXISTS api_keys (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        key TEXT,
-        expires_at INTEGER,
-        active INTEGER
-    )
-    `);
-});
-
-// ===== KEY VALIDATION =====
-function validateKey(key) {
-    return new Promise((resolve) => {
-        if (!key) return resolve(false);
-        db.get(
-            "SELECT * FROM api_keys WHERE key=? AND active=1",
-            [key],
-            (err, row) => {
-                if (err || !row) return resolve(false);
-                if (Date.now() > row.expires_at) return resolve(false);
-                resolve(true);
-            }
-        );
-    });
-}
-
-// ===== KEYWORDS & CONFIG =====
-const categories = {
-    kitchen: ["chef","cook","cooking","culinary","kitchen","food prep","pastry","baking","grill","fry","sous chef","line cook","food safety","haccp","plating","recipe"],
-    hospitality: ["hotel","hospitality","guest service","front office","housekeeping","concierge","reservation","check-in","receptionist","tourism"],
-    it: ["programming","coding","developer","software","javascript","python","java","html","css","react","node","backend","frontend","database","sql","api","git","cybersecurity","cloud","aws"],
-    marketing: ["marketing","digital marketing","seo","social media","branding","advertising","campaign","content creation","copywriting","analytics"],
-    sales: ["sales","selling","negotiation","closing","lead generation","business development"],
-    finance: ["finance","accounting","bookkeeping","budget","tax","audit","financial report","excel","payroll"],
-    education: ["teaching","teacher","education","lesson plan","curriculum","classroom","tutor","instructor"],
-    design: ["design","graphic design","photoshop","illustrator","ui","ux","figma","creative","layout"],
-    healthcare: ["nurse","doctor","medical","patient","clinic","hospital","treatment","pharmacy"],
-    engineering: ["engineer","engineering","mechanical","electrical","civil","construction","cad","autocad"],
-    logistics: ["logistics","supply chain","warehouse","inventory","shipping","delivery","distribution"],
-    customer_service: ["customer service","support","client","communication","problem solving","call center"],
-    administration: ["admin","administration","office","documentation","filing","data entry"],
-    hr: ["human resources","recruitment","hiring","interview","employee relations","onboarding"],
-    legal: ["legal","law","contract","compliance","litigation"],
-    media: ["video editing","photography","filming","content creator","youtube","editing","production"],
-    sports: ["athlete","coach","training","fitness","gym","exercise","sports","taekwondo"],
-    language: ["english","indonesian","translation","translator","bilingual"],
-    general_skills: ["leadership","teamwork","problem solving","critical thinking","time management","adaptability","creativity"]
-};
-
-const positiveIndicators = ["expert in", "experienced in", "proficient in", "skilled in", "strong in"];
-const negativeIndicators = ["bad at", "no experience", "lack of experience", "not skilled", "poor at", "beginner in"];
-
-// ===== ANALYZE ROUTE =====
-app.post("/analyze", upload.array("cvs"), async (req, res) => {
-    const apiKey = req.headers["x-api-key"];
-    const valid = await validateKey(apiKey);  
-    
-    if (!valid) {
-        // Hapus file yang terlanjur diupload jika key tidak valid
-        req.files.forEach(f => fs.unlinkSync(f.path));
-        return res.status(403).json({ error: "Invalid or expired key" });
-    }
-
-    let results = [];  
-
-    for (let file of req.files) {  
-        try {
-            const dataBuffer = fs.readFileSync(file.path);
-            const data = await pdfParse(dataBuffer);  
-            const text = data.text.toLowerCase().replace(/\s+/g, ' '); // Normalisasi spasi
-
-            let score = {};  
-
-            for (let category in categories) {
-                let total = 0;
-                for (let keyword of categories[category]) {
-                    const keywordRegex = new RegExp(`\\b${keyword}\\b`, "gi");
-                    const matches = text.match(keywordRegex);
-                    if (!matches) continue;
-
-                    let keywordScore = 0;
-                    
-                    // Logic Penalty/Bonus per mention
-                    const negRegex = new RegExp(`(?:${negativeIndicators.join("|")})[\\s\\S]{0,50}\\b${keyword}\\b`, "i");
-                    const posRegex = new RegExp(`(?:${positiveIndicators.join("|")})[\\s\\S]{0,50}\\b${keyword}\\b`, "i");
-
-                    if (negRegex.test(text)) {
-                        keywordScore -= (5 * matches.length);
-                    } else if (posRegex.test(text)) {
-                        keywordScore += (3 * matches.length);
-                    } else {
-                        keywordScore += (1 * matches.length);
-                    }
-                    total += keywordScore;
-                }
-                score[category] = total;
-            }
-
-            results.push({ file: file.originalname, score });
-        } catch (err) {
-            results.push({ file: file.originalname, error: "Failed to parse PDF" });
-        } finally {
-            if (fs.existsSync(file.path)) fs.unlinkSync(file.path);  
-        }
-    }  
-    res.json(results);
-});
-
-// ===== ADMIN ROUTES =====
-app.post("/admin/create-key", (req, res) => {
-    const months = parseInt(req.body.months) || 1;
-    const key = uuidv4();
-    const expires = Date.now() + (months * 30 * 24 * 60 * 60 * 1000);
-
-    db.run(
-        "INSERT INTO api_keys (key, expires_at, active) VALUES (?, ?, 1)",
-        [key, expires],
-        function(err) {
-            if (err) return res.status(500).json({ error: "Database error" });
-            res.json({ key, expires: new Date(expires).toLocaleString() });
-        }
-    );
-});
-
-app.post("/admin/deactivate", (req, res) => {
-    const { key } = req.body;
-    db.run("UPDATE api_keys SET active=0 WHERE key=?", [key], function(err) {
-        if (err) return res.status(500).json({ error: "Database error" });
-        res.json({ success: true, message: "Key deactivated" });
-    });
-});
-
-// ===== FRONTEND =====
-app.get("/", (req, res) => {
-    res.send(`
 <!DOCTYPE html>
-<html>
-<head><title>CV Analyzer</title></head>
-<body style="font-family:sans-serif; max-width: 800px; margin: auto; padding: 20px;">
-    <h2>CV Analyzer</h2>
-    <input type="text" id="apikey" placeholder="Enter API Key" style="width:100%"><br><br>
-    <input type="file" id="files" multiple><br><br>
-    <button onclick="upload()">Analyze CVs</button>
-    <pre id="result" style="background:#eee; padding:10px;"></pre>
-    <hr>
-    <h3>Admin Panel</h3>
-    <select id="months"><option value="1">1 Month</option><option value="12">1 Year</option></select>
-    <button onclick="createKey()">Generate Key</button><br><br>
-    <input type="text" id="deactivateKey" placeholder="Key to deactivate">
-    <button onclick="deactivate()">Deactivate</button>
-    <pre id="adminResult" style="background:#f9f9f9; padding:10px;"></pre>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hospitality CV Intelligence - Mobile Stable</title>
+    
+    <!-- FIX: Link Library Wajib agar Firestore & PDF bisa jalan -->
+    <script src="https://gstatic.com"></script>
+    <script src="https://gstatic.com"></script>
+    <script src="https://cloudflare.com"></script>
 
     <script>
-    async function upload() {
-        const key = document.getElementById("apikey").value;
-        const files = document.getElementById("files").files;
-        if(!key || files.length === 0) return alert("Fill key and select files");
+        // 1. FIREBASE CONFIG
+        const firebaseConfig = {
+            apiKey: "AIzaSyBhiVoMzpFyuLznahsq_J1Cs6g8sBVPhPk",
+            authDomain: "cv-analyzer-b6914.firebaseapp.com",
+            projectId: "cv-analyzer-b6914",
+            storageBucket: "cv-analyzer-b6914.firebasestorage.app",
+            messagingSenderId: "504659232250",
+            appId: "1:504659232250:web:2c4324c1c83fb1bc8e5043"
+        };
 
-        let formData = new FormData();
-        for (let file of files) formData.append("cvs", file);
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
 
-        document.getElementById("result").innerText = "Analyzing...";
-        const res = await fetch("/analyze", {
-            method: "POST",
-            headers: { "x-api-key": key },
-            body: formData
-        });
-        const data = await res.json();
-        document.getElementById("result").innerText = JSON.stringify(data, null, 2);
-    }
+        // 2. DATABASE KATEGORI
+        const categories = {
+            kitchen: ["chef", "cook", "pastry", "bakery", "culinary", "haccp", "food safety", "plating", "grill", "fry", "sous chef", "commis", "butcher", "garde manger", "kitchen brigade", "menu planning", "food production", "steward", "baking", "sauce chef", "expeditor", "food costing"],
+            front_office: ["receptionist", "front desk", "concierge", "bellboy", "reservation", "opera pms", "vhp", "night auditor", "guest relation", "check-in", "check-out", "room allotment", "guest folio", "lobby", "telephone operator", "door attendant", "butler", "valet"],
+            housekeeping: ["room attendant", "public area", "laundry", "linen", "cleaning service", "housekeeping", "sanitation", "chemical", "turndown", "steward", "bed making", "vacuuming", "lost and found", "amenities", "scrubbing", "room status", "floor supervisor"],
+            fb_service: ["waiter", "waitress", "server", "bartender", "barista", "mixology", "banquet", "fine dining", "room service", "upselling", "beverage", "cocktail", "wine", "table set-up", "buffet", "sommelier", "order taker", "pos system"],
+            engineering: ["maintenance", "electrical", "plumbing", "hvac", "ac technician", "boiler", "mechanical", "preventive maintenance", "generator", "stp", "water treatment", "electrician", "civil engineering"],
+            admin_hr: ["human resources", "hrd", "payroll", "recruiter", "training manager", "general manager", "accounting", "finance", "purchasing", "cost control", "sales marketing", "public relation", "security", "safety officer"]
+        };
 
-    async function createKey() {
-        const months = document.getElementById("months").value;
-        const res = await fetch("/admin/create-key", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ months })
-        });
-        const data = await res.json();
-        document.getElementById("adminResult").innerText = "NEW KEY: " + data.key;
-    }
+        // 3. FUNGSI ANALISIS CV
+        async function runAnalysis() {
+            const kInput = document.getElementById('compKey').value;
+            if(!kInput) return alert("⚠️ Isi API Key!");
 
-    async function deactivate() {
-        const key = document.getElementById("deactivateKey").value;
-        const res = await fetch("/admin/deactivate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ key })
-        });
-        const data = await res.json();
-        document.getElementById("adminResult").innerText = data.success ? "Deactivated" : "Failed";
-    }
+            try {
+                const snap = await db.collection("api_keys").doc(kInput).get();
+                if(!snap.exists || !snap.data().active || Date.now() > snap.data().expires_at) {
+                    return alert("❌ Key Tidak Valid atau Expired!");
+                }
+
+                const files = document.getElementById('cvFiles').files;
+                if(files.length === 0) return alert("📂 Pilih file PDF!");
+
+                document.getElementById('results').innerHTML = "⏳ Menganalisis... (Proses Massal)";
+                pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cloudflare.com';
+
+                let output = "";
+                for (let f of files) {
+                    const buf = await f.arrayBuffer();
+                    const pdf = await pdfjsLib.getDocument(buf).promise;
+                    let text = "";
+                    for(let i=1; i<=pdf.numPages; i++) {
+                        const page = await pdf.getPage(i);
+                        const content = await page.getTextContent();
+                        text += content.items.map(s => s.str).join(" ") + " ";
+                    }
+                    
+                    let res = {};
+                    for(let cat in categories) {
+                        let s = 0;
+                        categories[cat].forEach(word => {
+                            const regex = new RegExp(`\\b${word}\\b`, "gi");
+                            const matches = text.match(regex);
+                            if(matches) s += matches.length;
+                        });
+                        res[cat] = s;
+                    }
+                    output += `<div class='res'><strong>📄 ${f.name}</strong><br><small>${JSON.stringify(res).replace(/[{}"]/g, '').replace(/,/g, ' | ')}</small></div>`;
+                }
+                document.getElementById('results').innerHTML = output;
+            } catch (e) { alert("Error: " + e.message); }
+        }
+
+        // 4. FUNGSI ADMIN
+        function checkAdminLock() {
+            const input = document.getElementById('masterKey').value;
+            if (input === "ADMIN-66771111JJ9K") {
+                alert("✅ Akses Terbuka!");
+                document.getElementById('adminContent').style.display = "block";
+                document.getElementById('adminLoginBox').style.display = "none";
+                loadAdminList();
+            } else { alert("❌ Kode Salah!"); }
+        }
+
+        async function generateKey() {
+            const company = document.getElementById('newComp').value;
+            const months = parseInt(document.getElementById('months').value);
+            if(!company) return alert("⚠️ Isi nama hotel!");
+
+            const newId = "HOSP-" + Math.random().toString(36).substr(2, 6).toUpperCase();
+            const expiry = Date.now() + (months * 30 * 24 * 60 * 60 * 1000);
+
+            try {
+                await db.collection("api_keys").doc(newId).set({
+                    company: company,
+                    key: newId,
+                    expires_at: expiry,
+                    active: true
+                });
+                alert("✅ Sukses! Key Baru: " + newId);
+                document.getElementById('newComp').value = "";
+                loadAdminList();
+            } catch (e) { alert("Error: " + e.message); }
+        }
+
+        async function loadAdminList() {
+            try {
+                const snap = await db.collection("api_keys").get();
+                let html = "<table><tr><th>Hotel</th><th>Key</th><th>Status</th></tr>";
+                snap.forEach(doc => {
+                    const data = doc.data();
+                    const isExp = Date.now() > data.expires_at;
+                    html += `<tr><td>${data.company}</td><td><code>${data.key}</code></td><td>${data.active && !isExp ? '✅' : '❌'}</td></tr>`;
+                });
+                document.getElementById('adminList').innerHTML = html + "</table>";
+            } catch (e) { console.error(e); }
+        }
     </script>
+
+    <style>
+        body { font-family: sans-serif; background: #f4f7f9; padding: 15px; margin: 0; }
+        .card { max-width: 500px; margin: auto; background: white; padding: 25px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.15); border-top: 5px solid #007bff; }
+        input, select, button { width: 100%; padding: 15px; margin: 10px 0; border-radius: 10px; border: 1px solid #ddd; box-sizing: border-box; font-size: 16px; }
+        button { background: #007bff; color: white; border: none; font-weight: bold; cursor: pointer; -webkit-appearance: none; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; }
+        th, td { border: 1px solid #eee; padding: 8px; text-align: left; }
+        .res { background: #f8f9fa; padding: 15px; border-left: 5px solid #007bff; margin-top: 15px; border-radius: 8px; font-size: 12px; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h2 style="text-align:center; color:#007bff;">Hospitality CV Analyzer</h2>
+    <input type="text" id="compKey" placeholder="Masukkan API Key">
+    <input type="file" id="cvFiles" multiple accept=".pdf">
+    <button onclick="runAnalysis()">ANALISIS MASSAL</button>
+    <div id="results"></div>
+</div>
+
+<div class="card" style="margin-top: 20px; border-top: 5px solid red;">
+    <h3 style="text-align:center;">Admin Management</h3>
+    <div id="adminLoginBox">
+        <input type="password" id="masterKey" placeholder="Master Secret Key">
+        <button onclick="checkAdminLock()" style="background:#555;">Verify Admin Access</button>
+    </div>
+    
+    <div id="adminContent" style="display:none;">
+        <label style="font-weight:bold;">Buat API Key Baru:</label>
+        <input type="text" id="newComp" placeholder="Nama Hotel/Perusahaan">
+        <select id="months">
+            <option value="1">1 Bulan</option>
+            <option value="3">3 Bulan</option>
+            <option value="12">1 Tahun</option>
+        </select>
+        <button onclick="generateKey()" style="background:#28a745;">💾 SIMPAN KE CLOUD</button>
+        <hr>
+        <h4 style="margin-bottom:5px;">Daftar Key Aktif:</h4>
+        <div id="adminList" style="overflow-x:auto;"></div>
+    </div>
+</div>
+
 </body>
 </html>
-    `);
-});
-
-app.listen(3000, () => console.log("Server running on http://localhost:3000"));
