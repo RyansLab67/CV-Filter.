@@ -146,33 +146,99 @@ const const categories = {
 };
 
 // ===== ANALYZE =====
+// ===== POSITIVE PHRASES =====
+const positiveIndicators = [
+    "expert in",
+    "experienced in",
+    "experienced with",
+    "proficient in",
+    "skilled in",
+    "advanced in",
+    "strong in",
+    "specialized in",
+    "highly skilled in",
+    "competent in"
+];
+
+// ===== NEGATIVE PHRASES =====
+const negativeIndicators = [
+    "bad at",
+    "no experience",
+    "lack of experience",
+    "not skilled",
+    "poor at",
+    "beginner in",
+    "little experience",
+    "no knowledge",
+    "weak in",
+    "struggle with",
+    "inexperienced",
+    "not familiar with"
+];
+
+// ===== ANALYZE =====
 app.post("/analyze", upload.array("cvs"), async (req, res) => {
     const apiKey = req.headers["x-api-key"];
 
-    const valid = await validateKey(apiKey);
-    if (!valid) return res.status(403).json({ error: "Invalid or expired key" });
+    const valid = await validateKey(apiKey);  
+    if (!valid) return res.status(403).json({ error: "Invalid or expired key" });  
 
-    let results = [];
+    let results = [];  
 
-    for (let file of req.files) {
-        const data = await pdfParse(fs.readFileSync(file.path));
-        const text = data.text.toLowerCase();
+    for (let file of req.files) {  
+        const data = await pdfParse(fs.readFileSync(file.path));  
+        const text = data.text.toLowerCase();  
 
-        let score = {};
+        let score = {};  
 
         for (let category in categories) {
-            score[category] = categories[category].filter(word =>
-                text.includes(word)
-            ).length;
+            let total = 0;
+
+            for (let keyword of categories[category]) {
+
+                const keywordRegex = new RegExp(`\\b${keyword}\\b`, "gi");
+                const matches = text.match(keywordRegex);
+                if (!matches) continue;
+
+                let keywordScore = 0;
+
+                // NEGATIVE CHECK (strong penalty)
+                const negativeRegex = new RegExp(
+                    `(\\b(?:${negativeIndicators.join("|")})\\b)[\\s\\S]{0,50}\\b${keyword}\\b`,
+                    "gi"
+                );
+
+                if (negativeRegex.test(text)) {
+                    keywordScore -= 5 * matches.length; // HEAVY punishment
+                    total += keywordScore;
+                    continue; // skip positive if negative found
+                }
+
+                // STRONG POSITIVE CHECK
+                const positiveRegex = new RegExp(
+                    `(\\b(?:${positiveIndicators.join("|")})\\b)[\\s\\S]{0,50}\\b${keyword}\\b`,
+                    "gi"
+                );
+
+                if (positiveRegex.test(text)) {
+                    keywordScore += 3 * matches.length; // strong bonus
+                } else {
+                    keywordScore += 1 * matches.length; // normal mention
+                }
+
+                total += keywordScore;
+            }
+
+            score[category] = total;
         }
 
-        results.push({
-            file: file.originalname,
-            score
-        });
+        results.push({  
+            file: file.originalname,  
+            score  
+        });  
 
-        fs.unlinkSync(file.path); // cleanup
-    }
+        fs.unlinkSync(file.path);  
+    }  
 
     res.json(results);
 });
