@@ -1,3 +1,6 @@
+index.html
+
+  1
 <!DOCTYPE html>
 <html lang="id">
 <head>
@@ -19,8 +22,6 @@
     .cat-item b { display: block; font-size: 1.25rem; color: var(--primary); }
     .penalty-box { background: #fff1f2; color: #991b1b; padding: 10px; border-radius: 8px; font-size: 0.85rem; margin-top: 10px; border: 1px solid #fecaca; }
     .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #f1f5f9; padding-bottom: 15px; margin-bottom: 20px; }
-    .loader { display: inline-block; width: 20px; height: 20px; border: 3px solid #e2e8f0; border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -72,39 +73,38 @@
   </div>
 </div>
 
-<!-- FIXED: Correct PDF.js CDN -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<!-- Library PDF.js untuk membaca file PDF -->
+<script src="https://cloudflare.com"></script>
 <script>
-// FIXED: Set correct worker URL
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+// Konfigurasi Worker PDF.js
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cloudflare.com';
 
-// --- DATABASE CONFIG (Using localStorage as fallback) ---
+// --- DATABASE CONFIG ---
+const DB_URL = "https://cv-filter-db7bc-default-rtdb.asia-southeast1.firebasedatabase.app/.json"; 
 const MASTER_ADMIN = "ADMIN-118JG881J6FGhY";
 
-// Improved SKILLS with word boundaries
 const SKILLS = {
-    "Front Office": ["receptionist", "front desk", "opera", "pms", "check-in", "concierge", "vhp", "reservation", "night audit", "complaint", "telephone"],
-    "F&B Dept": ["waiter", "waitress", "server", "banquet", "barista", "restaurant", "dining", "order", "table", "mixology", "pos"],
-    "Kitchen": ["chef", "cook", "commis", "culinary", "haccp", "pastry", "bakery", "production", "mise", "plating", "butcher", "steward"],
-    "Housekeeping": ["cleaning", "attendant", "laundry", "linen", "turndown", "chemical", "area", "sanitizing", "vacuum", "bed"],
-    "Management": ["manager", "supervisor", "leader", "kpi", "scheduling", "inventory", "budgeting", "reporting", "control", "sop"],
-    "Soft Skills": ["communication", "teamwork", "problem", "english", "hospitality", "flexible", "multitasking", "organized", "customer"]
+    "Front Office": ["receptionist", "front desk", "opera", "pms", "check-in", "concierge", "vhp", "reservation", "night audit", "handling complaint", "telephone operator"],
+    "F&B Dept": ["waiter", "waitress", "server", "banquet", "barista", "restaurant", "fine dining", "order taker", "table setup", "mixology", "pos system", "food safety"],
+    "Kitchen": ["chef", "cook", "commis", "culinary", "haccp", "pastry", "bakery", "food production", "mise en place", "plating", "butcher", "steward"],
+    "Housekeeping": ["cleaning", "room attendant", "laundry", "linen", "turndown", "chemical", "public area", "sanitizing", "vacuum", "bed making"],
+    "Management": ["manager", "supervisor", "leader", "kpi", "scheduling", "inventory", "budgeting", "reporting", "cost control", "sop", "coordinator"],
+    "Soft Skills": ["communication", "teamwork", "problem solving", "english", "hospitality", "flexible", "multitasking", "organized", "customer oriented"]
 };
 
 // --- LOGIN LOGIC ---
 async function handleLogin() {
     const key = document.getElementById('accessKey').value.trim();
     if(key === MASTER_ADMIN) return showPanel('adminPanel');
-    
-    // Check localStorage (fallback database)
-    const stored = localStorage.getItem('cvdb_' + key);
-    if(stored) {
-        const data = JSON.parse(stored);
-        if(Date.now() < data.expires) return showPanel('companyPanel');
-        alert("Kunci Kadaluarsa!");
-    } else {
-        alert("Kunci tidak terdaftar!");
-    }
+
+    try {
+        const res = await fetch(DB_URL);
+        const data = await res.json();
+        if(data && data[key]) {
+            if(Date.now() < data[key].expires) return showPanel('companyPanel');
+            alert("Kunci Kadaluarsa!");
+        } else { alert("Kunci tidak terdaftar!"); }
+    } catch (e) { alert("Gagal koneksi database!"); }
 }
 
 function showPanel(id) {
@@ -121,11 +121,12 @@ async function generateCloudKey() {
     const key = `KEYC-${name.substring(0,3).toUpperCase()}-${Math.random().toString(36).substring(2,8).toUpperCase()}`;
     const expiry = Date.now() + (months * 30 * 24 * 60 * 60 * 1000);
 
-    // FIXED: Store in localStorage
-    localStorage.setItem('cvdb_' + key, JSON.stringify({ client: name, expires: expiry }));
-    
-    document.getElementById('keyDisplay').classList.remove('hidden');
-    document.getElementById('finalKey').innerText = key;
+    const update = {}; update[key] = { client: name, expires: expiry };
+    try {
+        await fetch(DB_URL, { method: 'PATCH', body: JSON.stringify(update) });
+        document.getElementById('keyDisplay').classList.remove('hidden');
+        document.getElementById('finalKey').innerText = key;
+    } catch (e) { alert("Error database!"); }
 }
 
 // --- SCANNING & SCORING LOGIC ---
@@ -133,60 +134,43 @@ async function processCVs() {
     const files = document.getElementById('cvFiles').files;
     const output = document.getElementById('cvResults');
     if(files.length === 0) return alert("Pilih file!");
-    
-    output.innerHTML = "<p style='text-align:center'><span class='loader'></span> Membedah struktur CV & mendeteksi skill...</p>";
+    output.innerHTML = "<p style='text-align:center'>Membedah struktur CV & mendeteksi skill...</p>";
 
     for (let file of files) {
         try {
             const buffer = await file.arrayBuffer();
             const pdf = await pdfjsLib.getDocument({data: buffer}).promise;
             let text = "";
-            
-            // OPTIMIZED: Faster text extraction
-            for(let i = 1; i <= pdf.numPages; i++) {
+            for(let i=1; i<=pdf.numPages; i++){
                 const page = await pdf.getPage(i);
                 const content = await page.getTextContent();
-                text += " " + content.items.map(s => s.str).join(" ");
+                text += content.items.map(s => s.str).join(" ");
             }
-            
             text = text.toLowerCase();
+            
             const report = calculateFinalScore(text);
             renderCV(file.name, report);
         } catch (err) {
-            console.error('Error processing CV:', err);
-            output.innerHTML += `<div class="card" style="border-left-color:var(--warning)"><strong>❌ ${file.name}</strong> - Gagal membaca PDF</div>`;
+            console.error(err);
         }
     }
-    
-    // Clear loading message if no results
-    if(output.innerHTML.includes("loader")) output.innerHTML = "";
+    if(output.innerHTML.includes("Membedah")) output.innerHTML = "";
 }
 
-// IMPROVED: Better keyword matching
 function calculateFinalScore(text) {
     let catScores = {};
     let totalPositive = 0;
-    let matchedKeywords = {};
-    
     for (let cat in SKILLS) {
-        // Count keyword matches with word boundary detection
-        let matches = SKILLS[cat].filter(word => {
-            const regex = new RegExp(`\\b${word}\\b`, 'gi');
-            return regex.test(text);
-        });
-        
-        matchedKeywords[cat] = matches;
-        let score = Math.min(100, Math.round((matches.length / SKILLS[cat].length) * 100));
+        let count = SKILLS[cat].filter(word => text.includes(word)).length;
+        let score = Math.min(100, Math.round((count / 3) * 100));
         catScores[cat] = score;
         totalPositive += score;
     }
-    
-    const negatives = ["no experience", "poor", "bad", "not good", "struggle", "lack of", "never worked"];
+    const negatives = ["no experience", "poor at", "bad", "not good", "struggle with", "lack of", "never worked"];
     let penalty = 0;
     negatives.forEach(n => { if(text.includes(n)) penalty += 15; });
-    
     let final = Math.max(0, Math.round((totalPositive / 6) - penalty));
-    return { catScores, final, penalty, matchedKeywords };
+    return { catScores, final, penalty };
 }
 
 function renderCV(name, data) {
@@ -194,7 +178,6 @@ function renderCV(name, data) {
     for(let c in data.catScores) {
         cats += `<div class="cat-item"><span>${c}</span><b>${data.catScores[c]}%</b></div>`;
     }
-    
     document.getElementById('cvResults').innerHTML += `
         <div class="card">
             <div style="display:flex; justify-content:space-between; align-items:center">
@@ -211,3 +194,5 @@ function renderCV(name, data) {
 </script>
 </body>
 </html>
+
+<!DOCTYPE html>\n<html lang="en">\n<head>\n    <meta charset="UTF-8">\n    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n    <title>Hotel Finder</title>\n    <style>\n        body {\n            font-family: Arial, sans-serif;\n            background: linear-gradient(to right, #ff7e5f, #feb47b);\n            margin: 0;\n            padding: 0;\n            transition: background 0.5s;\n        }\n        header {\n            background: rgba(255, 255, 255, 0.8);\n            padding: 20px;\n            text-align: center;\n        }\n        h1 {\n            color: #333;\n            margin: 0;\n            font-size: 2.5em;\n        }\n        .search-container {\n            margin: 20px auto;\n            width: 80%;\n            max-width: 600px;\n            display: flex;\n            justify-content: space-between;\n            border-radius: 10px;\n            box-shadow: 0 4px 10px rgba(0,0,0,0.1);\n            overflow: hidden;\n        }\n        .search-container input {\n            padding: 10px;\n            border: none;\n            flex: 1;\n            outline: none;\n        }\n        .search-container button {\n            background: #feb47b;\n            border: none;\n            padding: 10px 20px;\n            cursor: pointer;\n            transition: background 0.3s;\n        }\n        .search-container button:hover {\n            background: #ff7e5f;\n        }\n        .results {\n            margin-top: 20px;\n            padding: 10px;\n            background: rgba(255, 255, 255, 0.9);\n            border-radius: 10px;\n            box-shadow: 0 2px 5px rgba(0,0,0,0.2);\n        }\n        .result-item {\n            border-bottom: 1px solid #ddd;\n            padding: 10px;\n            transition: background 0.3s;\n        }\n        .result-item:last-child {\n            border-bottom: none;\n        }\n        .result-item:hover {\n            background: #f9f9f9;\n        }\n    </style>\n</head>\n<body>\n    <header>\n        <h1>Find Your Perfect Hotel</h1>\n    </header>\n    <div class="search-container">\n        <input type="text" placeholder="Enter hotel name or keyword...">\n        <button>Search</button>\n    </div>\n    <div class="results">\n        <div class="result-item">Hotel A - Skills: Customer Service, Cleanliness</div>\n        <div class="result-item">Hotel B - Skills: Maintenance, Hospitality</div>\n        <div class="result-item">Hotel C - Skills: Management, Catering</div>\n        <div class="result-item">Hotel D - Skills: Communication, Facilities</div>\n        <div class="result-item">Hotel E - Skills: Service, Quality</div>\n    </div>\n</body>\n</html>\n
