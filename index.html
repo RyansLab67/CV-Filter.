@@ -1,1389 +1,292 @@
-import { useState, useCallback, useEffect, useRef } from "react";
-import * as pdfjsLib from "pdfjs-dist";
+const express = require("express");
+const multer = require("multer");
+const pdfParse = require("pdf-parse");
+const sqlite3 = require("sqlite3").verbose();
+const fs = require("fs");
+const { v4: uuidv4 } = require("uuid");
 
-// ============================================================================
-// TYPES & INTERFACES
-// ============================================================================
+const app = express();
+app.use(express.json());
 
-interface License {
-  id: number;
-  companyName: string;
-  licenseKey: string;
-  isActive: boolean;
-  notes: string | null;
-  expiresAt: string | null;
-  lastSeenAt: string | null;
-  isOnline: boolean;
-  createdAt: string;
+const upload = multer({ dest: "uploads/" });
+
+// ===== DATABASE =====
+const db = new sqlite3.Database("./database.db");
+
+db.run(`
+CREATE TABLE IF NOT EXISTS api_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT,
+    expires_at INTEGER,
+    active INTEGER
+)
+`);
+
+// ===== KEY VALIDATION =====
+function validateKey(key) {
+    return new Promise((resolve) => {
+        db.get(
+            "SELECT * FROM api_keys WHERE key=? AND active=1",
+            [key],
+            (err, row) => {
+                if (!row) return resolve(false);
+                if (Date.now() > row.expires_at) return resolve(false);
+                resolve(true);
+            }
+        );
+    });
 }
 
-interface CVResult {
-  fileName: string;
-  score: number;
-  label: "Strong" | "Potential" | "Low";
-  details: Array<{ label: string; delta: number; positive: boolean }>;
-  highlightedText: string;
-}
-
-type FileStatus = "queued" | "analyzing" | "done" | "error";
-type UserRole = "none" | "user" | "admin";
-
-interface QueueItem {
-  file: File;
-  status: FileStatus;
-  result?: CVResult;
-}
-
-// ============================================================================
-// CV FILTER CATEGORIES & LOGIC
-// ============================================================================
-
-const CATEGORIES = {
-  front_office: {
-    label: "Front Office / Reception",
-    score: 3,
-    terms: [
-      "front desk",
-      "receptionist",
-      "guest services",
-      "front office",
-      "fdm",
-      "agent",
-      "reservation",
+// ===== KEYWORDS =====
+const const categories = {
+    kitchen: [
+        "chef","cook","cooking","culinary","kitchen","food prep","food preparation",
+        "pastry","baking","bakery","grill","fry","restaurant","menu","dish",
+        "sous chef","line cook","food safety","haccp","plating","recipe"
     ],
-  },
-  housekeeping: {
-    label: "Housekeeping",
-    score: 3,
-    terms: [
-      "housekeeping",
-      "housekeeper",
-      "hsk",
-      "room attendant",
-      "cleaning",
-      "laundry",
+
+    hospitality: [
+        "hotel","hospitality","guest service","front office","housekeeping",
+        "concierge","reservation","check-in","check out","room service",
+        "guest relations","booking","receptionist","tourism","travel"
     ],
-  },
-  kitchen: {
-    label: "Kitchen / Culinary",
-    score: 3,
-    terms: [
-      "chef",
-      "cook",
-      "culinary",
-      "kitchen",
-      "sous chef",
-      "head chef",
-      "pastry",
-      "commis",
-      "food preparation",
-      "cooking",
-      "menu planning",
+
+    it: [
+        "programming","coding","developer","software","web development",
+        "javascript","python","java","html","css","react","node","backend",
+        "frontend","database","sql","api","debugging","git","github",
+        "cybersecurity","network","cloud","aws","ai","machine learning"
     ],
-  },
-  management: {
-    label: "Management / Supervisory",
-    score: 3,
-    terms: [
-      "manager",
-      "supervisor",
-      "team leader",
-      "duty manager",
-      "assistant manager",
-      "operations manager",
+
+    marketing: [
+        "marketing","digital marketing","seo","social media","branding",
+        "advertising","campaign","content creation","copywriting",
+        "analytics","engagement","sales funnel","email marketing",
+        "influencer","promotion","market research"
     ],
-  },
-  sales_revenue: {
-    label: "Sales / Revenue",
-    score: 2,
-    terms: ["sales", "revenue", "upsell", "cross-sell", "room upgrade"],
-  },
-  english: {
-    label: "English Proficiency",
-    score: 2,
-    terms: ["english", "fluent", "toefl", "ielts", "business english"],
-  },
-  hospitality_education: {
-    label: "Hospitality Education",
-    score: 2,
-    terms: ["hospitality management", "hotel management", "hospitality degree"],
-  },
-  work_experience: {
-    label: "Work Experience",
-    score: 1,
-    terms: ["years of experience", "internship", "training"],
-  },
-  certifications: {
-    label: "Certifications & Training",
-    score: 1,
-    terms: ["certified", "certification", "food handler", "fire safety"],
-  },
-  soft_skills: {
-    label: "Professional Soft Skills",
-    score: 1,
-    terms: ["teamwork", "hardworking", "reliable", "flexible", "adaptable"],
-  },
+
+    sales: [
+        "sales","selling","negotiation","closing","lead generation",
+        "client acquisition","business development","target","revenue"
+    ],
+
+    finance: [
+        "finance","accounting","bookkeeping","budget","tax","audit",
+        "financial report","excel","spreadsheet","cost analysis",
+        "investment","banking","payroll"
+    ],
+
+    education: [
+        "teaching","teacher","education","lesson plan","curriculum",
+        "classroom","training","tutor","instructor","student assessment",
+        "learning","academic"
+    ],
+
+    design: [
+        "design","graphic design","photoshop","illustrator","ui","ux",
+        "figma","branding","visual","creative","layout","animation"
+    ],
+
+    healthcare: [
+        "nurse","doctor","medical","patient","clinic","hospital",
+        "treatment","diagnosis","healthcare","pharmacy","caregiver"
+    ],
+
+    engineering: [
+        "engineer","engineering","mechanical","electrical","civil",
+        "construction","cad","autocad","project engineering"
+    ],
+
+    logistics: [
+        "logistics","supply chain","warehouse","inventory","shipping",
+        "delivery","distribution","procurement","transport","stock"
+    ],
+
+    customer_service: [
+        "customer service","support","client","communication",
+        "problem solving","call center","help desk","complaint handling"
+    ],
+
+    administration: [
+        "admin","administration","office","documentation","filing",
+        "data entry","clerical","scheduling","coordination"
+    ],
+
+    hr: [
+        "human resources","recruitment","hiring","interview",
+        "employee relations","training","payroll","onboarding"
+    ],
+
+    legal: [
+        "legal","law","contract","compliance","regulation",
+        "litigation","paralegal","attorney"
+    ],
+
+    media: [
+        "video editing","photography","filming","content creator",
+        "youtube","editing","production","broadcast"
+    ],
+
+    sports: [
+        "athlete","coach","training","fitness","gym","exercise",
+        "strength","conditioning","sports","taekwondo"
+    ],
+
+    language: [
+        "english","indonesian","translation","translator",
+        "bilingual","multilingual","communication"
+    ],
+
+    general_skills: [
+        "leadership","teamwork","problem solving","critical thinking",
+        "time management","adaptability","creativity",
+        "discipline","hardworking","fast learner"
+    ]
+};
 };
 
-const NEGATIVE_TERMS = [
-  "no experience",
-  "never worked",
-  "no hospitality experience",
-  "fresh graduate without experience",
-];
+// ===== ANALYZE =====
+app.post("/analyze", upload.array("cvs"), async (req, res) => {
+    const apiKey = req.headers["x-api-key"];
 
-// ============================================================================
-// UTILITY FUNCTIONS
-// ============================================================================
+    const valid = await validateKey(apiKey);
+    if (!valid) return res.status(403).json({ error: "Invalid or expired key" });
 
-function getStatus(license: License): "active" | "inactive" | "expired" {
-  if (!license.isActive) return "inactive";
-  if (license.expiresAt && new Date() > new Date(license.expiresAt))
-    return "expired";
-  return "active";
-}
+    let results = [];
 
-function daysUntil(dateStr: string): number {
-  return Math.ceil(
-    (new Date(dateStr).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
-  );
-}
+    for (let file of req.files) {
+        const data = await pdfParse(fs.readFileSync(file.path));
+        const text = data.text.toLowerCase();
 
-function addMonths(months: number): string {
-  const d = new Date();
-  d.setMonth(d.getMonth() + months);
-  return d.toISOString().split("T")[0];
-}
+        let score = {};
 
-function addYears(years: number): string {
-  const d = new Date();
-  d.setFullYear(d.getFullYear() + years);
-  return d.toISOString().split("T")[0];
-}
+        for (let category in categories) {
+            score[category] = categories[category].filter(word =>
+                text.includes(word)
+            ).length;
+        }
 
-function analyzeText(rawText: string, fileName: string): CVResult {
-  const text = rawText.toLowerCase();
-  let score = 0;
-  const details: CVResult["details"] = [];
-  let highlighted = rawText;
-
-  for (const [, data] of Object.entries(CATEGORIES)) {
-    let found = false;
-    for (const term of data.terms) {
-      if (text.includes(term.toLowerCase())) {
-        found = true;
-        const regex = new RegExp(
-          `(${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`,
-          "gi"
-        );
-        highlighted = highlighted.replace(
-          regex,
-          '<mark style="background:#d4a843;color:#0d1117;padding:1px 3px;border-radius:3px;font-weight:600;">$1</mark>'
-        );
-      }
-    }
-    if (found) {
-      score += data.score;
-      details.push({ label: data.label, delta: data.score, positive: true });
-    }
-  }
-
-  for (const term of NEGATIVE_TERMS) {
-    if (text.includes(term)) {
-      score -= 3;
-      details.push({ label: `Penalty: "${term}"`, delta: -3, positive: false });
-      const regex = new RegExp(
-        `(${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`,
-        "gi"
-      );
-      highlighted = highlighted.replace(
-        regex,
-        '<span style="background:#ef4444;color:white;padding:1px 3px;border-radius:3px;">$1</span>'
-      );
-    }
-  }
-
-  const label: CVResult["label"] =
-    score >= 20 ? "Strong" : score >= 10 ? "Potential" : "Low";
-  return { fileName, score, label, details, highlightedText: highlighted };
-}
-
-async function extractTextFromPDF(file: File): Promise<string> {
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({
-    data: new Uint8Array(arrayBuffer),
-  }).promise;
-  let text = "";
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const content = await page.getTextContent();
-    text +=
-      content.items.map((item: { str?: string }) => item.str ?? "").join(" ") +
-      " ";
-  }
-  return text;
-}
-
-function exportCSV(results: CVResult[]) {
-  const headers = [
-    "Rank",
-    "Candidate (File)",
-    "Score",
-    "Rating",
-    "Matched Categories",
-  ];
-  const rows = results.map((r, i) => [
-    i + 1,
-    r.fileName.replace(/\.pdf$/i, ""),
-    r.score,
-    r.label,
-    r.details.filter((d) => d.positive).map((d) => d.label).join("; "),
-  ]);
-  const csv = [headers, ...rows]
-    .map((row) => row.map((c) => `"${c}"`).join(","))
-    .join("\n");
-  const blob = new Blob([csv], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "cv-results.csv";
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-// ============================================================================
-// COMPONENTS - Shared
-// ============================================================================
-
-function StatusBadge({ license }: { license: License }) {
-  const status = getStatus(license);
-  const styles = {
-    active: "bg-emerald-100 text-emerald-700",
-    inactive: "bg-slate-100 text-slate-600",
-    expired: "bg-red-100 text-red-600",
-  };
-  const labels = {
-    active: "Active",
-    inactive: "Inactive",
-    expired: "Expired",
-  };
-  return (
-    <span
-      className={`text-xs px-2 py-0.5 rounded-full font-medium ${styles[status]}`}
-    >
-      {labels[status]}
-    </span>
-  );
-}
-
-function ScorePill({ label }: { label: CVResult["label"] }) {
-  const styles = {
-    Strong: {
-      bg: "rgba(212,168,67,0.15)",
-      border: "rgba(212,168,67,0.35)",
-      color: "#d4a843",
-    },
-    Potential: {
-      bg: "rgba(59,130,246,0.15)",
-      border: "rgba(59,130,246,0.3)",
-      color: "#60a5fa",
-    },
-    Low: {
-      bg: "rgba(239,68,68,0.12)",
-      border: "rgba(239,68,68,0.25)",
-      color: "#f87171",
-    },
-  }[label];
-  return (
-    <span
-      className="text-xs font-semibold px-2.5 py-1 rounded-full"
-      style={{
-        background: styles.bg,
-        border: `1px solid ${styles.border}`,
-        color: styles.color,
-      }}
-    >
-      {label}
-    </span>
-  );
-}
-
-// ============================================================================
-// COMPONENTS - Authentication Screen
-// ============================================================================
-
-function AuthenticationScreen({
-  onAdminLogin,
-  onUserLogin,
-}: {
-  onAdminLogin: (key: string) => void;
-  onUserLogin: () => void;
-}) {
-  const [key, setKey] = useState("");
-  const [error, setError] = useState("");
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
-
-    // Verify admin key (in production, call your backend)
-    const res = await fetch("/api/admin/verify", {
-      headers: { "x-admin-key": key },
-    });
-
-    if (res.ok) {
-      onAdminLogin(key);
-    } else {
-      // Not admin, treat as regular user
-      onUserLogin();
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center px-4">
-      <div className="w-full max-w-md space-y-8">
-        <div className="text-center">
-          <div className="inline-flex items-center gap-2 bg-slate-800 text-white text-xs font-semibold px-3 py-1 rounded-full mb-4">
-            🏨 Hotel Management Suite
-          </div>
-          <h1 className="text-3xl font-bold text-white mb-2">Welcome</h1>
-          <p className="text-slate-400">
-            Enter your admin key for management access, or continue as a regular
-            user
-          </p>
-        </div>
-
-        <div className="bg-white/5 backdrop-blur rounded-2xl border border-white/10 p-8">
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-white mb-2">
-                Access Key (Optional)
-              </label>
-              <input
-                type="password"
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
-                placeholder="Leave blank to use CV Filter as regular user"
-                className="w-full px-4 py-3 rounded-xl bg-white/10 border border-white/20 text-white placeholder-white/40 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                autoFocus
-              />
-              {error && <p className="text-red-400 text-xs mt-2">{error}</p>}
-            </div>
-
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={() => onUserLogin()}
-                className="flex-1 py-3 rounded-xl font-semibold text-white bg-slate-700 hover:bg-slate-600 transition-colors text-sm"
-              >
-                Continue as User
-              </button>
-              <button
-                type="submit"
-                disabled={!key.trim()}
-                className="flex-1 py-3 rounded-xl font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-40 transition-colors text-sm"
-              >
-                Admin Login
-              </button>
-            </div>
-          </form>
-        </div>
-
-        <p className="text-center text-xs text-slate-500">
-          Admin panel for managing licenses and generating company keys
-        </p>
-      </div>
-    </div>
-  );
-}
-
-// ============================================================================
-// COMPONENTS - Admin Panel
-// ============================================================================
-
-function AdminPanel({ adminKey, onLogout }: { adminKey: string; onLogout: () => void }) {
-  const [licenses, setLicenses] = useState<License[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  const [newCompany, setNewCompany] = useState("");
-  const [newNotes, setNewNotes] = useState("");
-  const [newExpiry, setNewExpiry] = useState("");
-  const [creating, setCreating] = useState(false);
-  const [newLicense, setNewLicense] = useState<License | null>(null);
-  const [copied, setCopied] = useState<number | null>(null);
-
-  const [editingNotes, setEditingNotes] = useState<number | null>(null);
-  const [notesValue, setNotesValue] = useState("");
-  const [editingExpiry, setEditingExpiry] = useState<number | null>(null);
-  const [expiryValue, setExpiryValue] = useState("");
-
-  const refreshIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
-    null
-  );
-
-  const fetchLicenses = useCallback(async (key: string) => {
-    setLoading(true);
-    const res = await fetch("/api/admin/licenses", {
-      headers: { "x-admin-key": key },
-    });
-    if (res.ok) {
-      setLicenses(await res.json());
-    }
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    fetchLicenses(adminKey);
-    refreshIntervalRef.current = setInterval(() => {
-      fetch("/api/admin/licenses", { headers: { "x-admin-key": adminKey } })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data) => {
-          if (data) setLicenses(data);
+        results.push({
+            file: file.originalname,
+            score
         });
-    }, 15000);
-    return () => {
-      if (refreshIntervalRef.current) clearInterval(refreshIntervalRef.current);
-    };
-  }, [adminKey, fetchLicenses]);
 
-  const patch = useCallback(
-    async (id: number, body: object) => {
-      const res = await fetch(`/api/admin/licenses/${id}`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          "x-admin-key": adminKey,
-        },
-        body: JSON.stringify(body),
-      });
-      if (res.ok) await fetchLicenses(adminKey);
-    },
-    [adminKey, fetchLicenses]
-  );
-
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newCompany.trim()) return;
-    setCreating(true);
-    const res = await fetch("/api/admin/licenses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-admin-key": adminKey,
-      },
-      body: JSON.stringify({
-        companyName: newCompany.trim(),
-        notes: newNotes.trim() || null,
-        expiresAt: newExpiry || null,
-      }),
-    });
-    if (res.ok) {
-      setNewLicense(await res.json());
-      setNewCompany("");
-      setNewNotes("");
-      setNewExpiry("");
-      await fetchLicenses(adminKey);
+        fs.unlinkSync(file.path); // cleanup
     }
-    setCreating(false);
-  };
 
-  const copyKey = (id: number, key: string) => {
-    navigator.clipboard.writeText(key);
-    setCopied(id);
-    setTimeout(() => setCopied(null), 2000);
-  };
+    res.json(results);
+});
 
-  const saveNotes = async (id: number) => {
-    await patch(id, { notes: notesValue.trim() || null });
-    setEditingNotes(null);
-  };
+// ===== ADMIN ROUTES =====
 
-  const saveExpiry = async (id: number) => {
-    await patch(id, { expiresAt: expiryValue || null });
-    setEditingExpiry(null);
-  };
+// create key
+app.post("/admin/create-key", (req, res) => {
+    const { months } = req.body;
 
-  const renewLicense = (id: number, months: number) => {
-    patch(id, { expiresAt: addMonths(months), isActive: true });
-  };
+    const key = uuidv4();
+    const expires = Date.now() + months * 30 * 24 * 60 * 60 * 1000;
 
-  const active = licenses.filter((l) => getStatus(l) === "active").length;
-  const expired = licenses.filter((l) => getStatus(l) === "expired").length;
-  const inactive = licenses.filter((l) => getStatus(l) === "inactive").length;
-  const online = licenses.filter((l) => l.isOnline).length;
-
-  return (
-    <div className="min-h-screen bg-slate-50">
-      {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
-        <div className="max-w-3xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold text-slate-900">
-              🏨 License Management
-            </h1>
-            <p className="text-xs text-slate-500 mt-1">Admin Panel</p>
-          </div>
-          <button
-            onClick={onLogout}
-            className="px-4 py-2 text-sm font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
-          >
-            Sign Out
-          </button>
-        </div>
-      </header>
-
-      <div className="max-w-3xl mx-auto space-y-6 py-10 px-6">
-        {/* Stats */}
-        <div className="grid grid-cols-4 gap-3">
-          {[
-            { label: "Online Now", count: online, color: "emerald" },
-            { label: "Active", count: active, color: "blue" },
-            { label: "Expired", count: expired, color: "red" },
-            { label: "Inactive", count: inactive, color: "slate" },
-          ].map((s) => (
-            <div
-              key={s.label}
-              className={`bg-${s.color}-50 border border-${s.color}-200 rounded-lg p-4 text-center`}
-            >
-              <p className={`text-2xl font-bold text-${s.color}-600`}>
-                {s.count}
-              </p>
-              <p className={`text-xs text-${s.color}-600 mt-1`}>{s.label}</p>
-            </div>
-          ))}
-        </div>
-
-        {/* New License Alert */}
-        {newLicense && (
-          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-5 space-y-3">
-            <p className="text-sm font-semibold text-emerald-800">
-              License created for {newLicense.companyName}
-            </p>
-            <div className="flex items-center gap-3">
-              <code className="flex-1 bg-white border border-emerald-200 rounded-lg px-3 py-2 text-sm font-mono text-slate-700 truncate">
-                {newLicense.licenseKey}
-              </code>
-              <button
-                onClick={() => copyKey(newLicense.id, newLicense.licenseKey)}
-                className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition-colors shrink-0"
-              >
-                {copied === newLicense.id ? "Copied!" : "Copy"}
-              </button>
-            </div>
-            <button
-              onClick={() => setNewLicense(null)}
-              className="text-xs text-emerald-600 underline"
-            >
-              Dismiss
-            </button>
-          </div>
-        )}
-
-        {/* Create License Form */}
-        <div className="bg-white rounded-xl border border-slate-200 p-6">
-          <h2 className="text-sm font-semibold text-slate-700 mb-4">
-            Create New License
-          </h2>
-          <form onSubmit={handleCreate} className="space-y-3">
-            <div className="flex gap-3">
-              <input
-                type="text"
-                value={newCompany}
-                onChange={(e) => setNewCompany(e.target.value)}
-                placeholder="Company name *"
-                className="flex-1 px-4 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <button
-                type="submit"
-                disabled={creating || !newCompany.trim()}
-                className="px-5 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-40 transition-colors shrink-0"
-              >
-                {creating ? "Creating..." : "Create"}
-              </button>
-            </div>
-            <div className="flex gap-3">
-              <input
-                type="text"
-                value={newNotes}
-                onChange={(e) => setNewNotes(e.target.value)}
-                placeholder="Notes (optional)"
-                className="flex-1 px-4 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <div className="flex items-center gap-2 shrink-0">
-                <label className="text-xs text-slate-500 whitespace-nowrap">
-                  Expires
-                </label>
-                <input
-                  type="date"
-                  value={newExpiry}
-                  onChange={(e) => setNewExpiry(e.target.value)}
-                  className="px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <span className="text-xs text-slate-400">Quick expiry:</span>
-              {[
-                ["1 month", 1],
-                ["3 months", 3],
-                ["6 months", 6],
-                ["1 year", 12],
-              ].map(([label, n]) => (
-                <button
-                  key={label}
-                  type="button"
-                  onClick={() => setNewExpiry(addMonths(n as number))}
-                  className="text-xs px-2 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600 transition-colors"
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </form>
-        </div>
-
-        {/* License List */}
-        <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100">
-          {licenses.length === 0 ? (
-            <div className="p-8 text-center text-slate-400 text-sm">
-              No licenses yet. Create one above.
-            </div>
-          ) : (
-            licenses.map((license) => {
-              const status = getStatus(license);
-              const days = license.expiresAt ? daysUntil(license.expiresAt) : null;
-              return (
-                <div key={license.id} className="p-5 space-y-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap mb-1">
-                        <p className="font-semibold text-slate-800 text-sm">
-                          {license.companyName}
-                        </p>
-                        <StatusBadge license={license} />
-                        {days !== null && days > 0 && days <= 7 && (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">
-                            Expires in {days}d
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-slate-400">
-                        Created {new Date(license.createdAt).toLocaleDateString()}
-                        {license.lastSeenAt && (
-                          <span>
-                            {" "}
-                            · Last seen{" "}
-                            {new Date(license.lastSeenAt).toLocaleString()}
-                          </span>
-                        )}
-                      </p>
-                    </div>
-                    <div className="flex gap-2 shrink-0">
-                      <button
-                        onClick={() =>
-                          copyKey(license.id, license.licenseKey)
-                        }
-                        className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors text-slate-600"
-                      >
-                        {copied === license.id ? "Copied!" : "Copy key"}
-                      </button>
-                      <button
-                        onClick={() =>
-                          patch(license.id, { isActive: !license.isActive })
-                        }
-                        className={`px-3 py-1.5 text-xs rounded-lg font-bold transition-colors ${
-                          !license.isActive
-                            ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
-                            : "bg-red-100 text-red-700 hover:bg-red-200"
-                        }`}
-                      >
-                        {!license.isActive ? "Reactivate" : "Deactivate"}
-                      </button>
-                    </div>
-                  </div>
-
-                  <code className="block text-xs font-mono text-slate-400 bg-slate-50 rounded-lg px-3 py-2 truncate">
-                    {license.licenseKey}
-                  </code>
-
-                  {/* Notes */}
-                  <div className="flex items-start gap-2">
-                    <span className="text-xs text-slate-400 mt-1 shrink-0">
-                      Notes:
-                    </span>
-                    {editingNotes === license.id ? (
-                      <div className="flex-1 flex gap-2">
-                        <input
-                          autoFocus
-                          type="text"
-                          value={notesValue}
-                          onChange={(e) => setNotesValue(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") saveNotes(license.id);
-                            if (e.key === "Escape") setEditingNotes(null);
-                          }}
-                          placeholder="Add a note..."
-                          className="flex-1 text-xs px-3 py-1.5 rounded-lg border border-blue-300 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                        />
-                        <button
-                          onClick={() => saveNotes(license.id)}
-                          className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-                        >
-                          Save
-                        </button>
-                        <button
-                          onClick={() => setEditingNotes(null)}
-                          className="text-xs px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          setEditingNotes(license.id);
-                          setNotesValue(license.notes ?? "");
-                        }}
-                        className="text-xs text-slate-600 hover:text-blue-600 text-left"
-                      >
-                        {license.notes ? (
-                          license.notes
-                        ) : (
-                          <span className="text-slate-300 italic">
-                            Click to add notes...
-                          </span>
-                        )}
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Expiry */}
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs text-slate-400 shrink-0">
-                      Expiry:
-                    </span>
-                    {editingExpiry === license.id ? (
-                      <div className="flex gap-2 items-center flex-wrap">
-                        <input
-                          autoFocus
-                          type="date"
-                          value={expiryValue}
-                          onChange={(e) => setExpiryValue(e.target.value)}
-                          className="text-xs px-3 py-1.5 rounded-lg border border-blue-300 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                        />
-                        <button
-                          onClick={() => saveExpiry(license.id)}
-                          className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-                        >
-                          Save
-                        </button>
-                        <button
-                          onClick={() => setEditingExpiry(null)}
-                          className="text-xs px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <button
-                          onClick={() => {
-                            setEditingExpiry(license.id);
-                            setExpiryValue(
-                              license.expiresAt
-                                ? license.expiresAt.split("T")[0]
-                                : ""
-                            );
-                          }}
-                          className="text-xs text-slate-600 hover:text-blue-600"
-                        >
-                          {license.expiresAt ? (
-                            new Date(license.expiresAt).toLocaleDateString()
-                          ) : (
-                            <span className="text-slate-300 italic">
-                              No expiry — click to set
-                            </span>
-                          )}
-                        </button>
-                        <span className="text-slate-200">|</span>
-                        <span className="text-xs text-slate-400">
-                          Quick renew:
-                        </span>
-                        {[
-                          ["1m", 1],
-                          ["3m", 3],
-                          ["6m", 6],
-                        ].map(([label, n]) => (
-                          <button
-                            key={label}
-                            onClick={() => renewLicense(license.id, n)}
-                            className="text-xs px-2 py-1 rounded-md bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 font-medium transition-colors"
-                          >
-                            +{label}
-                          </button>
-                        ))}
-                        <button
-                          onClick={() =>
-                            patch(license.id, {
-                              expiresAt: addYears(1),
-                              isActive: true,
-                            })
-                          }
-                          className="text-xs px-2 py-1 rounded-md bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 font-medium transition-colors"
-                        >
-                          +1yr
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ============================================================================
-// COMPONENTS - CV Filter Tool
-// ============================================================================
-
-function CVFilterTool({ onLogout }: { onLogout: () => void }) {
-  const [queue, setQueue] = useState<QueueItem[]>([]);
-  const [dragOver, setDragOver] = useState(false);
-  const [selected, setSelected] = useState<CVResult | null>(null);
-  const [analyzing, setAnalyzing] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const addFiles = useCallback((files: FileList | File[]) => {
-    const pdfs = Array.from(files).filter((f) => f.type === "application/pdf");
-    if (!pdfs.length) return;
-    setQueue((prev) => {
-      const existing = new Set(prev.map((q) => q.file.name));
-      const newItems: QueueItem[] = pdfs
-        .filter((f) => !existing.has(f.name))
-        .map((f) => ({ file: f, status: "queued" }));
-      return [...prev, ...newItems];
-    });
-  }, []);
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    addFiles(e.dataTransfer.files);
-  };
-
-  const removeFile = (name: string) => {
-    setQueue((prev) => prev.filter((q) => q.file.name !== name));
-    if (selected?.fileName === name) setSelected(null);
-  };
-
-  const analyzeAll = async () => {
-    const pending = queue.filter((q) => q.status === "queued");
-    if (!pending.length) return;
-    setAnalyzing(true);
-
-    for (const item of pending) {
-      setQueue((prev) =>
-        prev.map((q) =>
-          q.file.name === item.file.name
-            ? { ...q, status: "analyzing" }
-            : q
-        )
-      );
-      try {
-        const text = await extractTextFromPDF(item.file);
-        const result = analyzeText(text, item.file.name);
-        setQueue((prev) =>
-          prev.map((q) =>
-            q.file.name === item.file.name
-              ? { ...q, status: "done", result }
-              : q
-          )
-        );
-      } catch {
-        setQueue((prev) =>
-          prev.map((q) =>
-            q.file.name === item.file.name ? { ...q, status: "error" } : q
-          )
-        );
-      }
-    }
-    setAnalyzing(false);
-  };
-
-  const reset = () => {
-    setQueue([]);
-    setSelected(null);
-  };
-
-  const results = queue
-    .filter((q) => q.status === "done" && q.result)
-    .map((q) => q.result!)
-    .sort((a, b) => b.score - a.score);
-
-  const queued = queue.filter((q) => q.status === "queued").length;
-  const strong = results.filter((r) => r.label === "Strong").length;
-  const potential = results.filter((r) => r.label === "Potential").length;
-  const low = results.filter((r) => r.label === "Low").length;
-
-  const card = {
-    background: "rgba(255,255,255,0.04)",
-    border: "1px solid rgba(255,255,255,0.08)",
-  };
-  const gold = "#d4a843";
-
-  return (
-    <div className="min-h-screen flex flex-col" style={{ background: "#0d1117", color: "white" }}>
-      {/* Top nav */}
-      <header
-        className="flex items-center justify-between px-6 py-4 shrink-0"
-        style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}
-      >
-        <div className="flex items-center gap-3">
-          <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-sm"
-            style={{ background: `linear-gradient(135deg, ${gold}, #f0c060)` }}
-          >
-            🏨
-          </div>
-          <div>
-            <p className="text-sm font-bold text-white">Smart CV Filter</p>
-            <p className="text-xs" style={{ color: "rgba(255,255,255,0.35)" }}>
-              Hospitality Hiring Tool
-            </p>
-          </div>
-        </div>
-        <button
-          onClick={onLogout}
-          className="text-xs px-3 py-1.5 rounded-lg transition-all"
-          style={{
-            background: "rgba(255,255,255,0.06)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            color: "rgba(255,255,255,0.5)",
-          }}
-        >
-          Sign out
-        </button>
-      </header>
-
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left column */}
-        <div
-          className="w-full max-w-xl flex flex-col p-6 gap-5 overflow-y-auto"
-          style={{
-            borderRight: selected ? "1px solid rgba(255,255,255,0.07)" : "none",
-          }}
-        >
-          {/* Stats */}
-          {results.length > 0 && (
-            <div className="grid grid-cols-3 gap-3">
-              {[
-                { label: "Strong", count: strong, color: gold },
-                { label: "Potential", count: potential, color: "#60a5fa" },
-                { label: "Low Match", count: low, color: "#f87171" },
-              ].map((s) => (
-                <div key={s.label} className="rounded-xl p-3 text-center" style={card}>
-                  <p className="text-2xl font-bold" style={{ color: s.color }}>
-                    {s.count}
-                  </p>
-                  <p
-                    className="text-xs mt-0.5"
-                    style={{ color: "rgba(255,255,255,0.4)" }}
-                  >
-                    {s.label}
-                  </p>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Drop zone */}
-          <div
-            onClick={() => inputRef.current?.click()}
-            onDrop={handleDrop}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragOver(true);
-            }}
-            onDragLeave={() => setDragOver(false)}
-            className="rounded-2xl p-8 text-center cursor-pointer transition-all"
-            style={{
-              border: `2px dashed ${dragOver ? gold : "rgba(255,255,255,0.12)"}`,
-              background: dragOver
-                ? "rgba(212,168,67,0.05)"
-                : "rgba(255,255,255,0.02)",
-            }}
-          >
-            <input
-              ref={inputRef}
-              type="file"
-              accept=".pdf"
-              multiple
-              className="hidden"
-              onChange={(e) => {
-                if (e.target.files) addFiles(e.target.files);
-                e.target.value = "";
-              }}
-            />
-            <div className="text-3xl mb-3">📂</div>
-            <p className="text-sm font-semibold text-white">
-              Drop PDFs here, or click to browse
-            </p>
-            <p className="text-xs mt-1" style={{ color: "rgba(255,255,255,0.3)" }}>
-              Select multiple files at once — all processed together
-            </p>
-          </div>
-
-          {/* Queue list */}
-          {queue.length > 0 && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <p
-                  className="text-xs font-semibold uppercase tracking-widest"
-                  style={{ color: "rgba(255,255,255,0.4)" }}
-                >
-                  {queue.length} file{queue.length !== 1 ? "s" : ""} queued
-                </p>
-                <button
-                  onClick={reset}
-                  className="text-xs"
-                  style={{ color: "rgba(255,255,255,0.3)" }}
-                >
-                  Clear all
-                </button>
-              </div>
-              {queue.map((item) => (
-                <div
-                  key={item.file.name}
-                  className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl"
-                  style={card}
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span className="text-sm shrink-0">
-                      {item.status === "analyzing"
-                        ? "⏳"
-                        : item.status === "done"
-                        ? "✅"
-                        : item.status === "error"
-                        ? "❌"
-                        : "📄"}
-                    </span>
-                    <p className="text-sm text-white truncate">
-                      {item.file.name.replace(/\.pdf$/i, "")}
-                    </p>
-                    {item.status === "analyzing" && (
-                      <span className="text-xs shrink-0" style={{ color: gold }}>
-                        Analyzing…
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {item.result && (
-                      <button
-                        onClick={() =>
-                          setSelected(
-                            selected?.fileName === item.file.name
-                              ? null
-                              : item.result!
-                          )
-                        }
-                        className="text-xs font-bold"
-                        style={{
-                          color:
-                            item.result.score >= 20
-                              ? gold
-                              : item.result.score >= 10
-                              ? "#60a5fa"
-                              : "#f87171",
-                        }}
-                      >
-                        {item.result.score}pt
-                      </button>
-                    )}
-                    <button
-                      onClick={() => removeFile(item.file.name)}
-                      className="text-xs w-5 h-5 rounded flex items-center justify-center hover:opacity-80"
-                      style={{ color: "rgba(255,255,255,0.3)" }}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Analyze button */}
-          {queued > 0 && (
-            <button
-              onClick={analyzeAll}
-              disabled={analyzing}
-              className="w-full py-4 rounded-2xl font-bold text-sm transition-all disabled:opacity-50"
-              style={{
-                background: `linear-gradient(135deg, ${gold}, #f0c060)`,
-                color: "#0d1117",
-              }}
-            >
-              {analyzing
-                ? "Analyzing CVs…"
-                : `Analyze ${queued} CV${queued !== 1 ? "s" : ""}`}
-            </button>
-          )}
-
-          {/* Results ranking */}
-          {results.length > 0 && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <p
-                  className="text-xs font-semibold uppercase tracking-widest"
-                  style={{ color: "rgba(255,255,255,0.4)" }}
-                >
-                  Ranked Results
-                </p>
-                <button
-                  onClick={() => exportCSV(results)}
-                  className="text-xs px-3 py-1 rounded-lg font-medium transition-all"
-                  style={{
-                    background: "rgba(212,168,67,0.12)",
-                    border: "1px solid rgba(212,168,67,0.2)",
-                    color: gold,
-                  }}
-                >
-                  Export CSV
-                </button>
-              </div>
-
-              {results.map((r, i) => (
-                <button
-                  key={r.fileName}
-                  onClick={() =>
-                    setSelected(
-                      selected?.fileName === r.fileName ? null : r
-                    )
-                  }
-                  className="w-full flex items-center justify-between gap-3 px-4 py-3.5 rounded-xl text-left transition-all"
-                  style={{
-                    background:
-                      selected?.fileName === r.fileName
-                        ? "rgba(212,168,67,0.08)"
-                        : "rgba(255,255,255,0.03)",
-                    border: `1px solid ${
-                      selected?.fileName === r.fileName
-                        ? "rgba(212,168,67,0.3)"
-                        : "rgba(255,255,255,0.07)"
-                    }`,
-                  }}
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span
-                      className="text-xs font-bold w-5 shrink-0 text-center"
-                      style={{
-                        color: i === 0 ? gold : "rgba(255,255,255,0.3)",
-                      }}
-                    >
-                      {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i + 1}`}
-                    </span>
-                    <p className="text-sm font-medium text-white truncate">
-                      {r.fileName.replace(/\.pdf$/i, "")}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <span
-                      className="text-base font-bold"
-                      style={{
-                        color:
-                          r.label === "Strong"
-                            ? gold
-                            : r.label === "Potential"
-                            ? "#60a5fa"
-                            : "#f87171",
-                      }}
-                    >
-                      {r.score}
-                    </span>
-                    <ScorePill label={r.label} />
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Right panel — detail */}
-        {selected && (
-          <div className="flex-1 overflow-y-auto p-6 space-y-5">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p
-                  className="text-xs font-semibold uppercase tracking-widest mb-1"
-                  style={{ color: "rgba(255,255,255,0.4)" }}
-                >
-                  Candidate Detail
-                </p>
-                <h2 className="text-xl font-bold text-white">
-                  {selected.fileName.replace(/\.pdf$/i, "")}
-                </h2>
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="text-center">
-                  <p
-                    className="text-3xl font-bold"
-                    style={{
-                      color:
-                        selected.label === "Strong"
-                          ? gold
-                          : selected.label === "Potential"
-                          ? "#60a5fa"
-                          : "#f87171",
-                    }}
-                  >
-                    {selected.score}
-                  </p>
-                  <p className="text-xs" style={{ color: "rgba(255,255,255,0.35)" }}>
-                    points
-                  </p>
-                </div>
-                <ScorePill label={selected.label} />
-                <button
-                  onClick={() => setSelected(null)}
-                  className="text-sm w-7 h-7 rounded-lg flex items-center justify-center"
-                  style={{
-                    background: "rgba(255,255,255,0.07)",
-                    color: "rgba(255,255,255,0.5)",
-                  }}
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-
-            {/* Score breakdown */}
-            <div className="rounded-2xl p-5 space-y-2" style={card}>
-              <p
-                className="text-xs font-semibold uppercase tracking-widest mb-3"
-                style={{ color: "rgba(255,255,255,0.4)" }}
-              >
-                Score Breakdown
-              </p>
-              {selected.details.length === 0 ? (
-                <p
-                  className="text-sm italic"
-                  style={{ color: "rgba(255,255,255,0.3)" }}
-                >
-                  No matching criteria found.
-                </p>
-              ) : (
-                selected.details.map((d, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center justify-between text-sm py-1.5"
-                    style={{
-                      borderBottom: "1px solid rgba(255,255,255,0.05)",
-                    }}
-                  >
-                    <span style={{ color: "rgba(255,255,255,0.75)" }}>
-                      {d.label}
-                    </span>
-                    <span
-                      className="font-bold"
-                      style={{
-                        color: d.positive ? gold : "#f87171",
-                      }}
-                    >
-                      {d.positive ? "+" : ""}{d.delta}
-                    </span>
-                  </div>
-                ))
-              )}
-            </div>
-
-            {/* CV preview */}
-            <div className="rounded-2xl p-5" style={card}>
-              <p
-                className="text-xs font-semibold uppercase tracking-widest mb-3"
-                style={{ color: "rgba(255,255,255,0.4)" }}
-              >
-                CV Preview — Highlighted Matches
-              </p>
-              <div
-                className="text-xs leading-relaxed max-h-72 overflow-y-auto pr-2"
-                style={{
-                  color: "rgba(255,255,255,0.55)",
-                  scrollbarWidth: "thin",
-                }}
-                dangerouslySetInnerHTML={{ __html: selected.highlightedText }}
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Empty right state */}
-        {!selected && results.length > 0 && (
-          <div
-            className="flex-1 flex items-center justify-center"
-            style={{ color: "rgba(255,255,255,0.15)" }}
-          >
-            <div className="text-center space-y-2">
-              <p className="text-4xl">👆</p>
-              <p className="text-sm">
-                Click a candidate to see their full breakdown
-              </p>
-            </div>
-          </div>
-        )}
-      </div>
-
-      <footer
-        className="text-center py-3 text-xs shrink-0"
-        style={{
-          color: "rgba(255,255,255,0.15)",
-          borderTop: "1px solid rgba(255,255,255,0.05)",
-        }}
-      >
-        All CV processing happens locally in your browser — no data is sent
-        anywhere.
-      </footer>
-    </div>
-  );
-}
-
-// ============================================================================
-// MAIN APP
-// ============================================================================
-
-export default function UnifiedApp() {
-  const [userRole, setUserRole] = useState<UserRole>("none");
-  const [adminKey, setAdminKey] = useState("");
-
-  const handleAdminLogin = (key: string) => {
-    setAdminKey(key);
-    setUserRole("admin");
-  };
-
-  const handleUserLogin = () => {
-    setUserRole("user");
-  };
-
-  const handleLogout = () => {
-    setUserRole("none");
-    setAdminKey("");
-  };
-
-  if (userRole === "none") {
-    return (
-      <AuthenticationScreen
-        onAdminLogin={handleAdminLogin}
-        onUserLogin={handleUserLogin}
-      />
+    db.run(
+        "INSERT INTO api_keys (key, expires_at, active) VALUES (?, ?, 1)",
+        [key, expires]
     );
-  }
 
-  if (userRole === "admin") {
-    return <AdminPanel adminKey={adminKey} onLogout={handleLogout} />;
-  }
+    res.json({ key, expires });
+});
 
-  return <CVFilterTool onLogout={handleLogout} />;
+// deactivate key
+app.post("/admin/deactivate", (req, res) => {
+    const { key } = req.body;
+
+    db.run("UPDATE api_keys SET active=0 WHERE key=?", [key]);
+
+    res.json({ success: true });
+});
+
+// ===== FRONTEND =====
+app.get("/", (req, res) => {
+    res.send(`
+<!DOCTYPE html>
+<html>
+<body style="font-family:sans-serif">
+<h2>CV Analyzer</h2>
+
+<input type="text" id="apikey" placeholder="Enter API Key"><br><br>
+<input type="file" id="files" multiple><br><br>
+
+<button onclick="upload()">Analyze</button>
+
+<pre id="result"></pre>
+
+<hr>
+
+<h3>Admin Panel</h3>
+
+<select id="months">
+  <option value="1">1 Month</option>
+  <option value="3">3 Months</option>
+  <option value="6">6 Months</option>
+  <option value="12">12 Months</option>
+</select>
+
+<button onclick="createKey()">Generate Key</button><br><br>
+
+<input type="text" id="deactivateKey" placeholder="Key to deactivate">
+<button onclick="deactivate()">Deactivate</button>
+
+<pre id="adminResult"></pre>
+
+<script>
+async function upload() {
+    const key = document.getElementById("apikey").value;
+    const files = document.getElementById("files").files;
+
+    let formData = new FormData();
+    for (let file of files) {
+        formData.append("cvs", file);
+    }
+
+    const res = await fetch("/analyze", {
+        method: "POST",
+        headers: { "x-api-key": key },
+        body: formData
+    });
+
+    const data = await res.json();
+    document.getElementById("result").innerText = JSON.stringify(data, null, 2);
 }
+
+async function createKey() {
+    const months = document.getElementById("months").value;
+
+    const res = await fetch("/admin/create-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ months })
+    });
+
+    const data = await res.json();
+    document.getElementById("adminResult").innerText = "NEW KEY: " + data.key;
+}
+
+async function deactivate() {
+    const key = document.getElementById("deactivateKey").value;
+
+    const res = await fetch("/admin/deactivate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key })
+    });
+
+    const data = await res.json();
+    document.getElementById("adminResult").innerText = "Deactivated";
+}
+</script>
+
+</body>
+</html>
+    `);
+});
+
+// ===== START SERVER =====
+app.listen(3000, () => console.log("Running on http://localhost:3000"));
