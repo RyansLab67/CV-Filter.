@@ -1,4 +1,15 @@
+<!-- LOAD LIBRARIES FIRST (THIS WAS YOUR MAIN PROBLEM) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+
 <script>
+
+// 🔥 SHOW ERRORS (so your site stops ghosting you)
+window.onerror = function(msg, url, line) {
+  alert("Error: " + msg + " at line " + line);
+};
+
 // FIREBASE CONFIG
 const firebaseConfig = {
   apiKey: "AIzaSyBhiVoMzpFyuLznahsq_J1Cs6g8sBVPhPk",
@@ -9,172 +20,136 @@ const firebaseConfig = {
   appId: "1:504659232250:web:2c4324c1c83fb1bc8e5043"
 };
 
-firebase.initializeApp(firebaseConfig);
-const db = firebase.firestore();
+// ✅ WAIT UNTIL PAGE + LIBS ARE READY
+window.addEventListener("load", () => {
 
-// PDF worker
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-"https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
+  console.log("Everything loaded properly");
 
-// 🔥 MASSIVE HOTEL KEYWORDS
-const categories = {
-  kitchen: [
-    "chef","cook","pastry","bakery","culinary","haccp","food safety",
-    "plating","grill","fry","sous chef","commis","butcher","garde manger",
-    "menu planning","food production","steward","baking","sauce",
-    "kitchen","cooking","recipe","meal prep","knife skills","food hygiene"
-  ],
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
 
-  front_office: [
-    "receptionist","front desk","concierge","bellboy","reservation",
-    "guest relation","check-in","check-out","lobby","hotel desk",
-    "guest handling","customer greeting","booking","pms","opera",
-    "guest service agent","front office","telephone operator"
-  ],
+  // PDF worker
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
 
-  housekeeping: [
-    "room attendant","laundry","linen","cleaning","housekeeping",
-    "sanitation","bed making","vacuum","room cleaning","floor cleaning",
-    "janitor","public area","dusting","restroom cleaning","amenities",
-    "towel replacement","room inspection"
-  ],
+  // 🔥 MASSIVE HOTEL KEYWORDS
+  const categories = {
+    kitchen: ["chef","cook","pastry","bakery","culinary","haccp","food safety","plating","grill","fry","sous chef","commis","butcher","garde manger","menu planning","food production","steward","baking","sauce","kitchen","cooking","recipe","meal prep","knife skills","food hygiene"],
 
-  service: [
-    "waiter","waitress","server","bartender","barista","mixology",
-    "room service","fine dining","buffet","table service","wine",
-    "beverage","order taking","hospitality service","tray service",
-    "customer service","upselling"
-  ],
+    front_office: ["receptionist","front desk","concierge","bellboy","reservation","guest relation","check-in","check-out","lobby","hotel desk","guest handling","customer greeting","booking","pms","opera","guest service agent","front office","telephone operator"],
 
-  engineering: [
-    "maintenance","electrical","plumbing","hvac","mechanical",
-    "technician","repair","generator","ac repair","wiring",
-    "preventive maintenance","facility maintenance"
-  ],
+    housekeeping: ["room attendant","laundry","linen","cleaning","housekeeping","sanitation","bed making","vacuum","room cleaning","floor cleaning","janitor","public area","dusting","restroom cleaning","amenities","towel replacement","room inspection"],
 
-  admin: [
-    "manager","hr","finance","accounting","payroll","recruitment",
-    "training","office","admin","documentation","reporting",
-    "human resources","supervisor","operations manager"
-  ]
-};
+    service: ["waiter","waitress","server","bartender","barista","mixology","room service","fine dining","buffet","table service","wine","beverage","order taking","hospitality service","tray service","customer service","upselling"],
 
-// 💀 NEGATIVE WORDS
-const negativeWords = [
-  "no", "not", "never", "lack", "without", "bad at", "poor", "weak",
-  "dont", "don't", "cannot", "can't", "fail", "failed", "inexperienced"
-];
+    engineering: ["maintenance","electrical","plumbing","hvac","mechanical","technician","repair","generator","ac repair","wiring","preventive maintenance","facility maintenance"],
 
-// 🧠 SMART ANALYSIS
-function analyzeText(text) {
-  let scores = {};
+    admin: ["manager","hr","finance","accounting","payroll","recruitment","training","office","admin","documentation","reporting","human resources","supervisor","operations manager"]
+  };
 
-  for (let cat in categories) {
-    let score = 0;
+  const negativeWords = ["no","not","never","lack","without","bad at","poor","weak","dont","don't","cannot","can't","fail","failed","inexperienced"];
 
-    categories[cat].forEach(keyword => {
-      const regex = new RegExp(`(.{0,20})\\b${keyword}\\b(.{0,20})`, "gi");
-      let match;
+  function analyzeText(text) {
+    let scores = {};
 
-      while ((match = regex.exec(text)) !== null) {
-        const context = match[0].toLowerCase();
+    for (let cat in categories) {
+      let score = 0;
 
-        let isNegative = negativeWords.some(neg => context.includes(neg));
+      categories[cat].forEach(keyword => {
+        const regex = new RegExp(`(.{0,20})\\b${keyword}\\b(.{0,20})`, "gi");
+        let match;
 
-        if (isNegative) {
-          score -= 2;
-        } else {
-          score += 1;
+        while ((match = regex.exec(text)) !== null) {
+          const context = match[0].toLowerCase();
+          let isNegative = negativeWords.some(neg => context.includes(neg));
+
+          score += isNegative ? -2 : 1;
         }
-      }
-    });
+      });
 
-    scores[cat] = score;
-  }
-
-  return scores;
-}
-
-// ANALYZE FUNCTION
-async function analyze() {
-  const key = document.getElementById("userKey").value;
-  const snap = await db.collection("keys").doc(key).get();
-
-  if (!snap.exists || !snap.data().active || Date.now() > snap.data().expire) {
-    alert("Invalid or expired key");
-    return;
-  }
-
-  const files = document.getElementById("files").files;
-  let resultHTML = "";
-
-  for (let f of files) {
-    const buffer = await f.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument(buffer).promise;
-
-    let text = "";
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      text += content.items.map(s => s.str).join(" ");
+      scores[cat] = score;
     }
 
-    let scores = analyzeText(text);
-
-    resultHTML += `<div class="res"><b>${f.name}</b><br>${JSON.stringify(scores)}</div>`;
+    return scores;
   }
 
-  document.getElementById("output").innerHTML = resultHTML;
-}
+  // ✅ EXPOSE FUNCTIONS TO BUTTONS
+  window.analyze = async function() {
+    const key = document.getElementById("userKey").value;
+    const snap = await db.collection("keys").doc(key).get();
 
-// ADMIN LOGIN
-function unlock() {
-  if (document.getElementById("adminPass").value === "ADMIN123") {
-    document.getElementById("adminPanel").style.display = "block";
+    if (!snap.exists || !snap.data().active || Date.now() > snap.data().expire) {
+      alert("Invalid or expired key");
+      return;
+    }
+
+    const files = document.getElementById("files").files;
+    let resultHTML = "";
+
+    for (let f of files) {
+      const buffer = await f.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument(buffer).promise;
+
+      let text = "";
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        text += content.items.map(s => s.str).join(" ");
+      }
+
+      let scores = analyzeText(text);
+      resultHTML += `<div class="res"><b>${f.name}</b><br>${JSON.stringify(scores)}</div>`;
+    }
+
+    document.getElementById("output").innerHTML = resultHTML;
+  };
+
+  window.unlock = function() {
+    if (document.getElementById("adminPass").value === "ADMIN123") {
+      document.getElementById("adminPanel").style.display = "block";
+      loadKeys();
+    } else alert("Wrong admin key");
+  };
+
+  async function loadKeys() {
+    const snap = await db.collection("keys").get();
+    let html = "";
+
+    snap.forEach(doc => {
+      const d = doc.data();
+      const expired = Date.now() > d.expire;
+
+      html += `<div>
+        ${d.company} | ${doc.id} | 
+        ${d.active && !expired ? "✅ Active" : "❌ Inactive"}
+      </div>`;
+    });
+
+    document.getElementById("list").innerHTML = html;
+  }
+
+  window.generateKey = async function() {
+    const comp = document.getElementById("company").value;
+    const months = parseInt(document.getElementById("duration").value);
+
+    const key = "KEY-" + Math.random().toString(36).substring(2,8).toUpperCase();
+    const expire = Date.now() + months * 30 * 24 * 60 * 60 * 1000;
+
+    await db.collection("keys").doc(key).set({
+      company: comp,
+      active: true,
+      expire: expire
+    });
+
+    alert("Key created: " + key);
     loadKeys();
-  } else alert("Wrong admin key");
-}
+  };
 
-// GENERATE KEY
-async function generateKey() {
-  const comp = document.getElementById("company").value;
-  const months = parseInt(document.getElementById("duration").value);
+  window.deactivate = async function() {
+    const key = document.getElementById("deactivateKey").value;
+    await db.collection("keys").doc(key).update({ active: false });
+    loadKeys();
+  };
 
-  const key = "KEY-" + Math.random().toString(36).substring(2,8).toUpperCase();
-  const expire = Date.now() + months * 30 * 24 * 60 * 60 * 1000;
-
-  await db.collection("keys").doc(key).set({
-    company: comp,
-    active: true,
-    expire: expire
-  });
-
-  alert("Key created: " + key);
-  loadKeys();
-}
-
-// DEACTIVATE
-async function deactivate() {
-  const key = document.getElementById("deactivateKey").value;
-  await db.collection("keys").doc(key).update({ active: false });
-  loadKeys();
-}
-
-// LOAD KEYS
-async function loadKeys() {
-  const snap = await db.collection("keys").get();
-  let html = "";
-
-  snap.forEach(doc => {
-    const d = doc.data();
-    const expired = Date.now() > d.expire;
-
-    html += `<div>
-      ${d.company} | ${doc.id} | 
-      ${d.active && !expired ? "✅ Active" : "❌ Inactive"}
-    </div>`;
-  });
-
-  document.getElementById("list").innerHTML = html;
-}
-                               </script>
+});
+      </script>
