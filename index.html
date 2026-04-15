@@ -1,170 +1,180 @@
-<!DOCTYPE html>
-<html lang="id">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hospitality CV Intelligence - Mobile Stable</title>
-    
-    <!-- FIX: Link Library Wajib agar Firestore & PDF bisa jalan -->
-    <script src="https://gstatic.com"></script>
-    <script src="https://gstatic.com"></script>
-    <script src="https://cloudflare.com"></script>
+<script>
+// FIREBASE CONFIG
+const firebaseConfig = {
+  apiKey: "AIzaSyBhiVoMzpFyuLznahsq_J1Cs6g8sBVPhPk",
+  authDomain: "cv-analyzer-b6914.firebaseapp.com",
+  projectId: "cv-analyzer-b6914",
+  storageBucket: "cv-analyzer-b6914.firebasestorage.app",
+  messagingSenderId: "504659232250",
+  appId: "1:504659232250:web:2c4324c1c83fb1bc8e5043"
+};
 
-    <script>
-        // 1. FIREBASE CONFIG
-        const firebaseConfig = {
-            apiKey: "AIzaSyBhiVoMzpFyuLznahsq_J1Cs6g8sBVPhPk",
-            authDomain: "cv-analyzer-b6914.firebaseapp.com",
-            projectId: "cv-analyzer-b6914",
-            storageBucket: "cv-analyzer-b6914.firebasestorage.app",
-            messagingSenderId: "504659232250",
-            appId: "1:504659232250:web:2c4324c1c83fb1bc8e5043"
-        };
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
 
-        firebase.initializeApp(firebaseConfig);
-        const db = firebase.firestore();
+// PDF worker
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+"https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
 
-        // 2. DATABASE KATEGORI
-        const categories = {
-            kitchen: ["chef", "cook", "pastry", "bakery", "culinary", "haccp", "food safety", "plating", "grill", "fry", "sous chef", "commis", "butcher", "garde manger", "kitchen brigade", "menu planning", "food production", "steward", "baking", "sauce chef", "expeditor", "food costing"],
-            front_office: ["receptionist", "front desk", "concierge", "bellboy", "reservation", "opera pms", "vhp", "night auditor", "guest relation", "check-in", "check-out", "room allotment", "guest folio", "lobby", "telephone operator", "door attendant", "butler", "valet"],
-            housekeeping: ["room attendant", "public area", "laundry", "linen", "cleaning service", "housekeeping", "sanitation", "chemical", "turndown", "steward", "bed making", "vacuuming", "lost and found", "amenities", "scrubbing", "room status", "floor supervisor"],
-            fb_service: ["waiter", "waitress", "server", "bartender", "barista", "mixology", "banquet", "fine dining", "room service", "upselling", "beverage", "cocktail", "wine", "table set-up", "buffet", "sommelier", "order taker", "pos system"],
-            engineering: ["maintenance", "electrical", "plumbing", "hvac", "ac technician", "boiler", "mechanical", "preventive maintenance", "generator", "stp", "water treatment", "electrician", "civil engineering"],
-            admin_hr: ["human resources", "hrd", "payroll", "recruiter", "training manager", "general manager", "accounting", "finance", "purchasing", "cost control", "sales marketing", "public relation", "security", "safety officer"]
-        };
+// 🔥 MASSIVE HOTEL KEYWORDS
+const categories = {
+  kitchen: [
+    "chef","cook","pastry","bakery","culinary","haccp","food safety",
+    "plating","grill","fry","sous chef","commis","butcher","garde manger",
+    "menu planning","food production","steward","baking","sauce",
+    "kitchen","cooking","recipe","meal prep","knife skills","food hygiene"
+  ],
 
-        // 3. FUNGSI ANALISIS CV
-        async function runAnalysis() {
-            const kInput = document.getElementById('compKey').value;
-            if(!kInput) return alert("⚠️ Isi API Key!");
+  front_office: [
+    "receptionist","front desk","concierge","bellboy","reservation",
+    "guest relation","check-in","check-out","lobby","hotel desk",
+    "guest handling","customer greeting","booking","pms","opera",
+    "guest service agent","front office","telephone operator"
+  ],
 
-            try {
-                const snap = await db.collection("api_keys").doc(kInput).get();
-                if(!snap.exists || !snap.data().active || Date.now() > snap.data().expires_at) {
-                    return alert("❌ Key Tidak Valid atau Expired!");
-                }
+  housekeeping: [
+    "room attendant","laundry","linen","cleaning","housekeeping",
+    "sanitation","bed making","vacuum","room cleaning","floor cleaning",
+    "janitor","public area","dusting","restroom cleaning","amenities",
+    "towel replacement","room inspection"
+  ],
 
-                const files = document.getElementById('cvFiles').files;
-                if(files.length === 0) return alert("📂 Pilih file PDF!");
+  service: [
+    "waiter","waitress","server","bartender","barista","mixology",
+    "room service","fine dining","buffet","table service","wine",
+    "beverage","order taking","hospitality service","tray service",
+    "customer service","upselling"
+  ],
 
-                document.getElementById('results').innerHTML = "⏳ Menganalisis... (Proses Massal)";
-                pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cloudflare.com';
+  engineering: [
+    "maintenance","electrical","plumbing","hvac","mechanical",
+    "technician","repair","generator","ac repair","wiring",
+    "preventive maintenance","facility maintenance"
+  ],
 
-                let output = "";
-                for (let f of files) {
-                    const buf = await f.arrayBuffer();
-                    const pdf = await pdfjsLib.getDocument(buf).promise;
-                    let text = "";
-                    for(let i=1; i<=pdf.numPages; i++) {
-                        const page = await pdf.getPage(i);
-                        const content = await page.getTextContent();
-                        text += content.items.map(s => s.str).join(" ") + " ";
-                    }
-                    
-                    let res = {};
-                    for(let cat in categories) {
-                        let s = 0;
-                        categories[cat].forEach(word => {
-                            const regex = new RegExp(`\\b${word}\\b`, "gi");
-                            const matches = text.match(regex);
-                            if(matches) s += matches.length;
-                        });
-                        res[cat] = s;
-                    }
-                    output += `<div class='res'><strong>📄 ${f.name}</strong><br><small>${JSON.stringify(res).replace(/[{}"]/g, '').replace(/,/g, ' | ')}</small></div>`;
-                }
-                document.getElementById('results').innerHTML = output;
-            } catch (e) { alert("Error: " + e.message); }
+  admin: [
+    "manager","hr","finance","accounting","payroll","recruitment",
+    "training","office","admin","documentation","reporting",
+    "human resources","supervisor","operations manager"
+  ]
+};
+
+// 💀 NEGATIVE WORDS
+const negativeWords = [
+  "no", "not", "never", "lack", "without", "bad at", "poor", "weak",
+  "dont", "don't", "cannot", "can't", "fail", "failed", "inexperienced"
+];
+
+// 🧠 SMART ANALYSIS
+function analyzeText(text) {
+  let scores = {};
+
+  for (let cat in categories) {
+    let score = 0;
+
+    categories[cat].forEach(keyword => {
+      const regex = new RegExp(`(.{0,20})\\b${keyword}\\b(.{0,20})`, "gi");
+      let match;
+
+      while ((match = regex.exec(text)) !== null) {
+        const context = match[0].toLowerCase();
+
+        let isNegative = negativeWords.some(neg => context.includes(neg));
+
+        if (isNegative) {
+          score -= 2;
+        } else {
+          score += 1;
         }
+      }
+    });
 
-        // 4. FUNGSI ADMIN
-        function checkAdminLock() {
-            const input = document.getElementById('masterKey').value;
-            if (input === "ADMIN-66771111JJ9K") {
-                alert("✅ Akses Terbuka!");
-                document.getElementById('adminContent').style.display = "block";
-                document.getElementById('adminLoginBox').style.display = "none";
-                loadAdminList();
-            } else { alert("❌ Kode Salah!"); }
-        }
+    scores[cat] = score;
+  }
 
-        async function generateKey() {
-            const company = document.getElementById('newComp').value;
-            const months = parseInt(document.getElementById('months').value);
-            if(!company) return alert("⚠️ Isi nama hotel!");
+  return scores;
+}
 
-            const newId = "HOSP-" + Math.random().toString(36).substr(2, 6).toUpperCase();
-            const expiry = Date.now() + (months * 30 * 24 * 60 * 60 * 1000);
+// ANALYZE FUNCTION
+async function analyze() {
+  const key = document.getElementById("userKey").value;
+  const snap = await db.collection("keys").doc(key).get();
 
-            try {
-                await db.collection("api_keys").doc(newId).set({
-                    company: company,
-                    key: newId,
-                    expires_at: expiry,
-                    active: true
-                });
-                alert("✅ Sukses! Key Baru: " + newId);
-                document.getElementById('newComp').value = "";
-                loadAdminList();
-            } catch (e) { alert("Error: " + e.message); }
-        }
+  if (!snap.exists || !snap.data().active || Date.now() > snap.data().expire) {
+    alert("Invalid or expired key");
+    return;
+  }
 
-        async function loadAdminList() {
-            try {
-                const snap = await db.collection("api_keys").get();
-                let html = "<table><tr><th>Hotel</th><th>Key</th><th>Status</th></tr>";
-                snap.forEach(doc => {
-                    const data = doc.data();
-                    const isExp = Date.now() > data.expires_at;
-                    html += `<tr><td>${data.company}</td><td><code>${data.key}</code></td><td>${data.active && !isExp ? '✅' : '❌'}</td></tr>`;
-                });
-                document.getElementById('adminList').innerHTML = html + "</table>";
-            } catch (e) { console.error(e); }
-        }
-    </script>
+  const files = document.getElementById("files").files;
+  let resultHTML = "";
 
-    <style>
-        body { font-family: sans-serif; background: #f4f7f9; padding: 15px; margin: 0; }
-        .card { max-width: 500px; margin: auto; background: white; padding: 25px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.15); border-top: 5px solid #007bff; }
-        input, select, button { width: 100%; padding: 15px; margin: 10px 0; border-radius: 10px; border: 1px solid #ddd; box-sizing: border-box; font-size: 16px; }
-        button { background: #007bff; color: white; border: none; font-weight: bold; cursor: pointer; -webkit-appearance: none; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; }
-        th, td { border: 1px solid #eee; padding: 8px; text-align: left; }
-        .res { background: #f8f9fa; padding: 15px; border-left: 5px solid #007bff; margin-top: 15px; border-radius: 8px; font-size: 12px; }
-    </style>
-</head>
-<body>
+  for (let f of files) {
+    const buffer = await f.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument(buffer).promise;
 
-<div class="card">
-    <h2 style="text-align:center; color:#007bff;">Hospitality CV Analyzer</h2>
-    <input type="text" id="compKey" placeholder="Masukkan API Key">
-    <input type="file" id="cvFiles" multiple accept=".pdf">
-    <button onclick="runAnalysis()">ANALISIS MASSAL</button>
-    <div id="results"></div>
-</div>
+    let text = "";
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      text += content.items.map(s => s.str).join(" ");
+    }
 
-<div class="card" style="margin-top: 20px; border-top: 5px solid red;">
-    <h3 style="text-align:center;">Admin Management</h3>
-    <div id="adminLoginBox">
-        <input type="password" id="masterKey" placeholder="Master Secret Key">
-        <button onclick="checkAdminLock()" style="background:#555;">Verify Admin Access</button>
-    </div>
-    
-    <div id="adminContent" style="display:none;">
-        <label style="font-weight:bold;">Buat API Key Baru:</label>
-        <input type="text" id="newComp" placeholder="Nama Hotel/Perusahaan">
-        <select id="months">
-            <option value="1">1 Bulan</option>
-            <option value="3">3 Bulan</option>
-            <option value="12">1 Tahun</option>
-        </select>
-        <button onclick="generateKey()" style="background:#28a745;">💾 SIMPAN KE CLOUD</button>
-        <hr>
-        <h4 style="margin-bottom:5px;">Daftar Key Aktif:</h4>
-        <div id="adminList" style="overflow-x:auto;"></div>
-    </div>
-</div>
+    let scores = analyzeText(text);
 
-</body>
-</html>
+    resultHTML += `<div class="res"><b>${f.name}</b><br>${JSON.stringify(scores)}</div>`;
+  }
+
+  document.getElementById("output").innerHTML = resultHTML;
+}
+
+// ADMIN LOGIN
+function unlock() {
+  if (document.getElementById("adminPass").value === "ADMIN123") {
+    document.getElementById("adminPanel").style.display = "block";
+    loadKeys();
+  } else alert("Wrong admin key");
+}
+
+// GENERATE KEY
+async function generateKey() {
+  const comp = document.getElementById("company").value;
+  const months = parseInt(document.getElementById("duration").value);
+
+  const key = "KEY-" + Math.random().toString(36).substring(2,8).toUpperCase();
+  const expire = Date.now() + months * 30 * 24 * 60 * 60 * 1000;
+
+  await db.collection("keys").doc(key).set({
+    company: comp,
+    active: true,
+    expire: expire
+  });
+
+  alert("Key created: " + key);
+  loadKeys();
+}
+
+// DEACTIVATE
+async function deactivate() {
+  const key = document.getElementById("deactivateKey").value;
+  await db.collection("keys").doc(key).update({ active: false });
+  loadKeys();
+}
+
+// LOAD KEYS
+async function loadKeys() {
+  const snap = await db.collection("keys").get();
+  let html = "";
+
+  snap.forEach(doc => {
+    const d = doc.data();
+    const expired = Date.now() > d.expire;
+
+    html += `<div>
+      ${d.company} | ${doc.id} | 
+      ${d.active && !expired ? "✅ Active" : "❌ Inactive"}
+    </div>`;
+  });
+
+  document.getElementById("list").innerHTML = html;
+}
+                               </script>
