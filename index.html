@@ -1,16 +1,56 @@
-<!-- LOAD LIBRARIES FIRST (THIS WAS YOUR MAIN PROBLEM) -->
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CV Analyzer</title>
+</head>
+
+<body>
+
+<h1>CV Analyzer</h1>
+
+<input type="text" id="userKey" placeholder="Enter company key">
+<input type="file" id="files" multiple>
+<button onclick="analyze()">Analyze CV</button>
+
+<div id="output"></div>
+
+<hr>
+
+<h2>Admin Panel</h2>
+<input type="password" id="adminPass" placeholder="Admin password">
+<button onclick="unlock()">Unlock</button>
+
+<div id="adminPanel" style="display:none;">
+  <input type="text" id="company" placeholder="Company name">
+
+  <select id="duration">
+    <option value="1">1 Month</option>
+    <option value="3">3 Months</option>
+    <option value="6">6 Months</option>
+    <option value="12">12 Months</option>
+  </select>
+
+  <button onclick="generateKey()">Generate Key</button>
+
+  <br><br>
+
+  <input type="text" id="deactivateKey" placeholder="Key to deactivate">
+  <button onclick="deactivate()">Deactivate</button>
+
+  <h3>All Keys</h3>
+  <div id="list"></div>
+</div>
+
+<!-- LIBRARIES -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
 
 <script>
-
-// 🔥 SHOW ERRORS (so your site stops ghosting you)
 window.onerror = function(msg, url, line) {
   alert("Error: " + msg + " at line " + line);
 };
 
-// FIREBASE CONFIG
 const firebaseConfig = {
   apiKey: "AIzaSyBhiVoMzpFyuLznahsq_J1Cs6g8sBVPhPk",
   authDomain: "cv-analyzer-b6914.firebaseapp.com",
@@ -20,30 +60,20 @@ const firebaseConfig = {
   appId: "1:504659232250:web:2c4324c1c83fb1bc8e5043"
 };
 
-// ✅ WAIT UNTIL PAGE + LIBS ARE READY
 window.addEventListener("load", () => {
-
-  console.log("Everything loaded properly");
 
   firebase.initializeApp(firebaseConfig);
   const db = firebase.firestore();
 
-  // PDF worker
   pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
 
-  // 🔥 MASSIVE HOTEL KEYWORDS
   const categories = {
     kitchen: ["chef","cook","pastry","bakery","culinary","haccp","food safety","plating","grill","fry","sous chef","commis","butcher","garde manger","menu planning","food production","steward","baking","sauce","kitchen","cooking","recipe","meal prep","knife skills","food hygiene"],
-
     front_office: ["receptionist","front desk","concierge","bellboy","reservation","guest relation","check-in","check-out","lobby","hotel desk","guest handling","customer greeting","booking","pms","opera","guest service agent","front office","telephone operator"],
-
     housekeeping: ["room attendant","laundry","linen","cleaning","housekeeping","sanitation","bed making","vacuum","room cleaning","floor cleaning","janitor","public area","dusting","restroom cleaning","amenities","towel replacement","room inspection"],
-
     service: ["waiter","waitress","server","bartender","barista","mixology","room service","fine dining","buffet","table service","wine","beverage","order taking","hospitality service","tray service","customer service","upselling"],
-
     engineering: ["maintenance","electrical","plumbing","hvac","mechanical","technician","repair","generator","ac repair","wiring","preventive maintenance","facility maintenance"],
-
     admin: ["manager","hr","finance","accounting","payroll","recruitment","training","office","admin","documentation","reporting","human resources","supervisor","operations manager"]
   };
 
@@ -73,7 +103,6 @@ window.addEventListener("load", () => {
     return scores;
   }
 
-  // ✅ EXPOSE FUNCTIONS TO BUTTONS
   window.analyze = async function() {
     const key = document.getElementById("userKey").value;
     const snap = await db.collection("keys").doc(key).get();
@@ -98,7 +127,7 @@ window.addEventListener("load", () => {
       }
 
       let scores = analyzeText(text);
-      resultHTML += `<div class="res"><b>${f.name}</b><br>${JSON.stringify(scores)}</div>`;
+      resultHTML += `<div><b>${f.name}</b><br>${JSON.stringify(scores)}</div>`;
     }
 
     document.getElementById("output").innerHTML = resultHTML;
@@ -119,10 +148,7 @@ window.addEventListener("load", () => {
       const d = doc.data();
       const expired = Date.now() > d.expire;
 
-      html += `<div>
-        ${d.company} | ${doc.id} | 
-        ${d.active && !expired ? "✅ Active" : "❌ Inactive"}
-      </div>`;
+      html += `<div>${d.company} | ${doc.id} | ${d.active && !expired ? "Active" : "Inactive"}</div>`;
     });
 
     document.getElementById("list").innerHTML = html;
@@ -152,4 +178,7 @@ window.addEventListener("load", () => {
   };
 
 });
-      </script>
+</script>
+
+</body>
+  </html>
